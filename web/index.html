@@ -57,11 +57,10 @@ add_equipment = { owner = GER type = medium_tank amount = 700 }
 add_equipment = { owner = FRA type = infantry_equipment amount = 700 }
 add_manpower = { owner = GER amount = 10000 }
 add_manpower = { owner = FRA amount = 10000 }
-create_division = { owner = GER location = 1 equipment = medium_tank battalions = 7 }
+create_division = { owner = GER location = 2 equipment = medium_tank battalions = 7 }
 create_division = { owner = FRA location = 1 equipment = infantry_equipment battalions = 7 }
-start_battle = { attacker = GER defender = FRA province = 1 }
-# 正常: FRA org先归零→撤退到省3(🚩📍1→3)
-# 想看歼灭: 把省3的owner改成GER(包围), FRA无路可退→💀</textarea>
+# 不自动开战, 用点选: 选GER师→点省1(敌方)进攻
+# 或点省3(己方)测试普通移动</textarea>
     <div class="controls">
       <button onclick="loadScript()">应用场景</button>
       <button class="secondary" onclick="tick(1)">▶ 推进1小时</button>
@@ -176,7 +175,8 @@ function refresh() {
     let status;
     if (d.annihilated) status = '💀 歼灭';
     else if (d.attacking) status = '⚔️ 进攻→' + d.dest;
-    else if (d.dest) status = '🚩 撤退→' + d.dest;
+    else if (d.retreating && d.dest) status = '🚩 撤退→' + d.dest;
+    else if (d.dest) status = '🚶 移动→' + d.dest;
     else if (d.retreating) status = '🔄 恢复中';
     else if (d.org <= 0) status = '⚠️ 破阵';
     else status = '🛡️ 驻扎';

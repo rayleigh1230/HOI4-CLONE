@@ -501,7 +501,7 @@ fn marching_division_loses_org() {
         terrain: "plains".into(), neighbors: vec![2],
     });
     world.provinces.insert(2, hoi4_clone::runtime::Province {
-        id: 2, owner: "GER".into(), controller: "GER".into(),
+        id: 2, owner: "FRA".into(), controller: "FRA".into(),
         terrain: "plains".into(), neighbors: vec![1],
     });
     run_setup(&mut world, &interp, r#"
@@ -517,7 +517,40 @@ fn marching_division_loses_org() {
     let org_after = world.divisions.get(&did).unwrap().org;
     assert!(
         org_after < org_before,
-        "移动中 org 应下降(每小时-0.2): before={org_before} after={org_after}"
+        "移向敌方省 org 应下降(每小时-0.2): before={org_before} after={org_after}"
+    );
+}
+
+#[test]
+fn marching_in_friendly_territory_no_org_loss() {
+    // 己方地块行军不掉 org(组织度损耗与地块归属相关)
+    use hoi4_clone::runtime::GameClock;
+    let mut reg = Registry::new();
+    register_all(&mut reg);
+    let interp = Interpreter::new(reg);
+    let mut world = World::new();
+    world.player_tag = "GER".into();
+    world.countries.insert("GER".into(), Default::default());
+    // 省1和省2都是GER己方
+    world.provinces.insert(1, hoi4_clone::runtime::Province {
+        id: 1, owner: "GER".into(), controller: "GER".into(),
+        terrain: "plains".into(), neighbors: vec![2],
+    });
+    world.provinces.insert(2, hoi4_clone::runtime::Province {
+        id: 2, owner: "GER".into(), controller: "GER".into(),
+        terrain: "plains".into(), neighbors: vec![1],
+    });
+    run_setup(&mut world, &interp, r#"
+        _setup = { create_division = { owner = GER location = 1 equipment = infantry_equipment battalions = 7 } }
+    "#);
+    let did = world.divisions.values().next().unwrap().id;
+    let org_before = world.divisions.get(&did).unwrap().org;
+    world.divisions.get_mut(&did).unwrap().destination = Some(2); // 移向己方省2
+    GameClock::advance(&interp, &mut world, 3);
+    let org_after = world.divisions.get(&did).unwrap().org;
+    assert!(
+        (org_after - org_before).abs() < 1e-9,
+        "己方地块行军 org 不应损耗: before={org_before} after={org_after}"
     );
 }
 

@@ -22,10 +22,19 @@ pub fn recover_org(world: &mut World) {
         if in_combat.contains(&div.id) {
             continue; // 战斗中不恢复
         }
-        // 主动行军(非撤退): 每小时掉 org, 不恢复
-        if div.destination.is_some() && !div.retreating {
-            div.org = (div.org + HOURLY_ORG_MOVEMENT_IMPACT).max(0.0);
-            continue;
+        // 主动行军(非撤退): org 损耗取决于目标地块归属
+        // 己方地块行军 → 不损耗 org; 敌方/中立地块 → 每小时 -0.2
+        if !div.retreating {
+            if let Some(dest) = div.destination {
+                let is_friendly = world.provinces.get(&dest)
+                    .map(|p| p.controller == div.owner_tag)
+                    .unwrap_or(false);
+                if !is_friendly {
+                    div.org = (div.org + HOURLY_ORG_MOVEMENT_IMPACT).max(0.0);
+                }
+                // 己方地块行军: org 不变(不损耗也不恢复, 行军中)
+                continue;
+            }
         }
         // 撤退中 或 静止非战斗: 恢复 org(撤退是脱离战斗休整)
         if div.org >= div.max_org {
