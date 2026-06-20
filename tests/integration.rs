@@ -116,6 +116,7 @@ fn focus_afghanistan_real_fragment() {
             owner: "AFG".into(),
             controller: "AFG".into(),
             terrain: "mountain".into(),
+            ..Default::default()
         },
     );
     interp.run(&effs, &mut world);

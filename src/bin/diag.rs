@@ -18,16 +18,15 @@ fn main() {
         start_battle = { attacker = GER defender = FRA province = 1 }
     "#;
     let block = parse(script).unwrap();
-    lower_effects(&block).iter().for_each(|e| {
-        interp.run(&[e.clone()], &mut world);
-    });
+    let effs = lower_effects(&block);
+    interp.run(&effs, &mut world);
 
     let fra_id = world.divisions.values().find(|d| d.owner_tag == "FRA").unwrap().id;
     println!("=== 开战 ===");
     print(&world, fra_id);
 
     // 每 24 小时打印一次, 看 HP/人力/装备 变化
-    for hour in [24, 48, 72, 96, 120, 144, 168] {
+    for _hour in [24, 48, 72, 96, 120, 144, 168] {
         GameClock::advance(&interp, &mut world, 24);
         println!("\n=== 第 {} 小时 ===", world.hour);
         print(&world, fra_id);

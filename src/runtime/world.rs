@@ -114,6 +114,15 @@ impl World {
             .map(|d| d.id)
             .collect()
     }
+
+    // 行军辅助(陆战循环)
+    /// 找某省的邻接己方省(撤退目标)。无则返回 None(被包围)
+    pub fn friendly_neighbor(&self, province: u32, tag: &str) -> Option<u32> {
+        let prov = self.provinces.get(&province)?;
+        prov.neighbors.iter().copied().find(|n| {
+            self.provinces.get(n).map(|p| p.controller == tag).unwrap_or(false)
+        })
+    }
 }
 
 #[cfg(test)]

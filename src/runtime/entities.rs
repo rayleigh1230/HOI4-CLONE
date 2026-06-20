@@ -1,10 +1,12 @@
 //! 游戏实体结构(M3)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Province {
     pub id: u32,
     pub owner: String,
     pub controller: String,
     pub terrain: String,
+    /// 邻接省份 id 列表(行军/撤退的基础设施)
+    pub neighbors: Vec<u32>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -45,6 +47,9 @@ pub struct Division {
     pub manpower_held: f64,
     // 撤退标志: org 归零但 HP 有余 → 撤退(保留师, 移出战斗, 待撤邻省)
     pub retreating: bool,
+    // 行军状态: 目标省(None=静止), 进度(0-1, 到1完成移动)
+    pub destination: Option<u32>,
+    pub move_progress: f64,
 }
 
 impl Division {

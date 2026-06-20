@@ -10,7 +10,8 @@ impl GameClock {
     pub fn tick(interp: &Interpreter, world: &mut World) {
         world.hour += 1;
         world.fire_event(interp, "on_hourly");
-        crate::combat::resolve::resolve_all_battles(world); // 战斗结算
+        crate::combat::resolve::resolve_all_battles(world); // 战斗结算(含撤退/包围判定)
+        crate::combat::movement::advance_movement(&mut *world); // 行军推进
         crate::combat::recovery::recover_org(world); // 组织度恢复(非战斗师)
         if world.hour % 24 == 0 {
             world.fire_event(interp, "on_daily");

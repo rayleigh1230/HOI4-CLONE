@@ -23,6 +23,7 @@ fn two_states_world() -> World {
             owner: "GER".into(),
             controller: "GER".into(),
             terrain: "plains".into(),
+            ..Default::default()
         },
     );
     w.provinces.insert(
@@ -32,6 +33,7 @@ fn two_states_world() -> World {
             owner: "GER".into(),
             controller: "GER".into(),
             terrain: "forest".into(),
+            ..Default::default()
         },
     );
     w

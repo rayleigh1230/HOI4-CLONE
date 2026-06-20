@@ -272,13 +272,29 @@ fn cleanup_battles(world: &mut World) {
         }
     }
 
-    // 标记撤退(保留师)
+    // 撤退处理: 分配撤退目标(邻接己方省); 无邻省→被包围→歼灭
+    let mut surrounded: Vec<u64> = Vec::new();
     for id in to_mark_retreat {
-        if let Some(d) = world.divisions.get_mut(&id) {
-            d.retreating = true;
+        let (loc, owner) = match world.divisions.get(&id) {
+            Some(d) => (d.location_province, d.owner_tag.clone()),
+            None => continue,
+        };
+        match world.friendly_neighbor(loc, &owner) {
+            Some(dest) => {
+                if let Some(d) = world.divisions.get_mut(&id) {
+                    d.retreating = true;
+                    d.destination = Some(dest);
+                    d.move_progress = 0.0;
+                }
+            }
+            None => {
+                // 无邻接己方省 → 被包围 → 歼灭
+                surrounded.push(id);
+            }
         }
     }
-    // 歼灭: 删除师
+    // 歼灭: 删除师(战斗歼灭 + 包围歼灭)
+    to_annihilate.extend(surrounded);
     for id in to_annihilate {
         world.divisions.remove(&id);
     }

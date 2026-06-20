@@ -18,6 +18,19 @@ fn setup_world() -> World {
     w.player_tag = "GER".into();
     w.countries.insert("GER".into(), Default::default());
     w.countries.insert("FRA".into(), Default::default());
+    // 省份布局: 1=战场, 10=GER后方, 20=FRA后方(让撤退师有处可退)
+    w.provinces.insert(1, hoi4_clone::runtime::Province {
+        id: 1, owner: "FRA".into(), controller: "FRA".into(),
+        terrain: "plains".into(), neighbors: vec![10, 20],
+    });
+    w.provinces.insert(10, hoi4_clone::runtime::Province {
+        id: 10, owner: "GER".into(), controller: "GER".into(),
+        terrain: "plains".into(), neighbors: vec![1],
+    });
+    w.provinces.insert(20, hoi4_clone::runtime::Province {
+        id: 20, owner: "FRA".into(), controller: "FRA".into(),
+        terrain: "plains".into(), neighbors: vec![1],
+    });
     w
 }
 
@@ -363,4 +376,76 @@ fn retreating_division_preserved_not_annihilated() {
     let fra = world.divisions.get(&fra_id).unwrap();
     assert!(fra.strength > 0.0, "撤退师 HP 应有余: {}", fra.strength);
     assert_eq!(world.battles.len(), 0, "撤退后战斗应结束");
+}
+
+#[test]
+fn surrounded_division_annihilated_on_retreat() {
+    // 包围歼灭: 撤退师无邻接己方省 → 被歼灭(而非撤退)
+    use hoi4_clone::runtime::GameClock;
+    let mut reg = Registry::new();
+    register_all(&mut reg);
+    let interp = Interpreter::new(reg);
+    let mut world = World::new();
+    world.player_tag = "GER".into();
+    world.countries.insert("GER".into(), Default::default());
+    world.countries.insert("FRA".into(), Default::default());
+    // 孤立省1: 只有自己, 无任何邻接 → FRA 撤退时无处可退 → 歼灭
+    world.provinces.insert(1, hoi4_clone::runtime::Province {
+        id: 1, owner: "FRA".into(), controller: "FRA".into(),
+        terrain: "plains".into(), neighbors: vec![], // 无邻接!
+    });
+    run_setup(&mut world, &interp, r#"
+        _setup = {
+            create_division = { owner = GER location = 1 equipment = medium_tank battalions = 7 }
+            create_division = { owner = FRA location = 1 soft_attack = 0 defense = 200 max_org = 30 max_strength = 100 equipment = infantry_equipment }
+            start_battle = { attacker = GER defender = FRA province = 1 }
+        }
+    "#);
+    let fra_id = world.divisions.values().find(|d| d.owner_tag == "FRA").unwrap().id;
+    // FRA org 会先归零(装甲碾压) → 尝试撤退 → 无邻省 → 包围歼灭
+    GameClock::advance(&interp, &mut world, 40);
+    assert!(
+        !world.divisions.contains_key(&fra_id),
+        "孤立省撤退应被包围歼灭, 师应消失"
+    );
+}
+
+#[test]
+fn retreating_division_moves_to_friendly_province() {
+    // 撤退师实际移动到邻接己方省
+    use hoi4_clone::runtime::GameClock;
+    let mut reg = Registry::new();
+    register_all(&mut reg);
+    let interp = Interpreter::new(reg);
+    let mut world = World::new();
+    world.player_tag = "GER".into();
+    world.countries.insert("GER".into(), Default::default());
+    world.countries.insert("FRA".into(), Default::default());
+    // 省1(战场) 邻接 省20(FRA后方)
+    world.provinces.insert(1, hoi4_clone::runtime::Province {
+        id: 1, owner: "FRA".into(), controller: "FRA".into(),
+        terrain: "plains".into(), neighbors: vec![20],
+    });
+    world.provinces.insert(20, hoi4_clone::runtime::Province {
+        id: 20, owner: "FRA".into(), controller: "FRA".into(),
+        terrain: "plains".into(), neighbors: vec![1],
+    });
+    run_setup(&mut world, &interp, r#"
+        _setup = {
+            create_division = { owner = GER location = 1 equipment = medium_tank battalions = 7 }
+            create_division = { owner = FRA location = 1 soft_attack = 0 defense = 200 max_org = 30 max_strength = 100 equipment = infantry_equipment }
+            start_battle = { attacker = GER defender = FRA province = 1 }
+        }
+    "#);
+    let fra_id = world.divisions.values().find(|d| d.owner_tag == "FRA").unwrap().id;
+    assert_eq!(world.divisions.get(&fra_id).unwrap().location_province, 1);
+    // 推进到 FRA 撤退 + 行军到达
+    GameClock::advance(&interp, &mut world, 60);
+    let fra = world.divisions.get(&fra_id);
+    assert!(fra.is_some(), "FRA 应撤退保留(有邻省可退), 不应歼灭");
+    let fra = fra.unwrap();
+    assert_eq!(
+        fra.location_province, 20,
+        "FRA 应撤退到邻接己方省20, 实际在 {}", fra.location_province
+    );
 }

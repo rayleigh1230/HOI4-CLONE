@@ -16,6 +16,31 @@ fn num_of(a: &Arg) -> Result<f64, CmdError> {
 }
 
 pub fn register(reg: &mut Registry) {
+    // 创建省份(行军基础设施: owner/controller/neighbors)
+    reg.register("create_province", |w, p| {
+        let id = num_of(np(p, "create_province", "id")?)? as u32;
+        let owner = np(p, "create_province", "owner")?.as_str()
+            .ok_or_else(|| CmdError::RuntimeError("owner 应为字符串".into()))?;
+        let terrain = ParamGet::get(p, "terrain").and_then(Arg::as_str).unwrap_or("plains");
+        // neighbors: 嵌套块参数 neighbors = { 10 20 } 或单值
+        let mut neighbors = Vec::new();
+        if let Some(Arg::Block(fields)) = ParamGet::get(p, "neighbors") {
+            for (_, v) in fields {
+                if let Some(n) = v.as_num() {
+                    neighbors.push(n as u32);
+                }
+            }
+        }
+        w.provinces.insert(id, crate::runtime::Province {
+            id,
+            owner: owner.into(),
+            controller: owner.into(),
+            terrain: terrain.into(),
+            neighbors,
+        });
+        Ok(())
+    });
+
     // 创建师(M3: 硬编码属性; M4 接装备+营汇总)
     reg.register("create_division", |w, p| {
         let owner = np(p, "create_division", "owner")?.as_str()
@@ -33,7 +58,7 @@ pub fn register(reg: &mut Registry) {
                     .copied()
                     .unwrap_or_else(|| {
                         // 未知装备退回步兵
-                        crate::combat::equipment_data::find_equipment("infantry_equipment").unwrap().clone()
+                        *crate::combat::equipment_data::find_equipment("infantry_equipment").unwrap()
                     });
                 let n = bn;
                 (
@@ -94,6 +119,8 @@ pub fn register(reg: &mut Registry) {
             manpower_need: mp_total,
             manpower_held: mp_total,
             retreating: false,
+            destination: None,
+            move_progress: 0.0,
         };
         w.add_division(d);
         Ok(())
