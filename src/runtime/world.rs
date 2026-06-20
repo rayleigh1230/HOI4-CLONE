@@ -88,9 +88,15 @@ impl World {
     pub fn current_scope(&self) -> Scope {
         self.scope_stack.last().cloned().unwrap_or(Scope::Root)
     }
-    /// 从栈顶往下找最近的国家作用域
+    /// 从栈顶往下找最近的国家作用域; 无则回退到 player_tag(顶层默认玩家国家)
     pub fn current_country(&self) -> Option<&str> {
-        self.scope_stack.iter().rev().find_map(|s| s.country_tag())
+        if let Some(t) = self.scope_stack.iter().rev().find_map(|s| s.country_tag()) {
+            Some(t)
+        } else if !self.player_tag.is_empty() {
+            Some(&self.player_tag)
+        } else {
+            None
+        }
     }
 
     // M3 实体管理

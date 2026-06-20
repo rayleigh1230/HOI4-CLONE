@@ -98,6 +98,25 @@ fn focus_afghanistan_real_fragment() {
     reg.register_trigger("is_owned_and_controlled_by", |_, _| Ok(true));
     let interp = Interpreter::new(reg);
     let mut world = World::new();
+    // M3: every_owned_state 真实枚举, 需设置 AFG 国家 + 省让它能遍历
+    world.player_tag = "AFG".into();
+    world.countries.insert(
+        "AFG".into(),
+        hoi4_clone::runtime::Country {
+            tag: "AFG".into(),
+            owned_states: vec![1],
+            capital_state: 1,
+        },
+    );
+    world.provinces.insert(
+        1,
+        hoi4_clone::runtime::Province {
+            id: 1,
+            owner: "AFG".into(),
+            controller: "AFG".into(),
+            terrain: "mountain".into(),
+        },
+    );
     interp.run(&effs, &mut world);
 
     assert!(

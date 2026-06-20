@@ -38,14 +38,7 @@ impl Interpreter {
                 Ok(())
             }
             Effect::ForEach { scope, filter, body } => {
-                let pass = match filter {
-                    Some(t) => self.eval(t, world)?,
-                    None => true,
-                };
-                if pass {
-                    eprintln!("[info] {scope}: 执行作用域体(M2 简化为单次)");
-                    self.run(body, world);
-                }
+                self.run_for_each(scope, filter.as_ref(), body, world)?;
                 Ok(())
             }
             Effect::Random { table } => {
@@ -55,6 +48,76 @@ impl Interpreter {
                 Ok(())
             }
         }
+    }
+
+    /// 作用域遍历: 根据 scope 名枚举实体, 每个压栈执行 body(M3 真实枚举)
+    fn run_for_each(
+        &self,
+        scope_name: &str,
+        filter: Option<&Trigger>,
+        body: &[Effect],
+        world: &mut World,
+    ) -> Result<(), CmdError> {
+        // 先收集要遍历的 Scope 列表(避免遍历时借用 world)
+        let targets: Vec<crate::runtime::Scope> = match scope_name {
+            "every_country" | "all_country" => world
+                .countries
+                .keys()
+                .map(|t| crate::runtime::Scope::Country(t.clone()))
+                .collect(),
+            "random_country" => {
+                let tags: Vec<String> = world.countries.keys().cloned().collect();
+                if tags.is_empty() {
+                    return Ok(());
+                }
+                // M3 确定性取首个(不引入 rand; 真正随机 M5)
+                vec![crate::runtime::Scope::Country(tags.into_iter().next().unwrap())]
+            }
+            "every_owned_state" | "all_owned_state" => {
+                let tag = match world.current_country() {
+                    Some(t) => t.to_string(),
+                    None => return Ok(()),
+                };
+                world
+                    .countries
+                    .get(&tag)
+                    .map(|c| {
+                        c.owned_states
+                            .iter()
+                            .map(|p| crate::runtime::Scope::Province(*p))
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            }
+            "all_army" | "every_army" => {
+                let tag = match world.current_country() {
+                    Some(t) => t.to_string(),
+                    None => return Ok(()),
+                };
+                world
+                    .divisions_of(&tag)
+                    .into_iter()
+                    .map(crate::runtime::Scope::Division)
+                    .collect()
+            }
+            _ => {
+                eprintln!("[warn] 未知作用域: {scope_name}, 跳过");
+                return Ok(());
+            }
+        };
+
+        for target in targets {
+            world.scope_stack.push(target);
+            let pass = match filter {
+                Some(t) => self.eval(t, world)?,
+                None => true,
+            };
+            if pass {
+                self.run(body, world);
+            }
+            world.scope_stack.pop();
+        }
+        Ok(())
     }
 
     pub fn eval(&self, t: &Trigger, world: &World) -> Result<bool, CmdError> {
