@@ -677,3 +677,45 @@ fn frontline_route_causes_reserve_routing() {
     let fra_alive = world.divisions.values().filter(|d| d.owner_tag == "FRA").count();
     assert!(fra_alive > 0, "FRA 师应撤退存活(非歼灭)");
 }
+
+#[test]
+fn routed_reserve_keeps_org() {
+    // 带溃的预备队师 org 保持(非归零) — 它没参战, org 不被打掉
+    use hoi4_clone::runtime::GameClock;
+    let mut reg = Registry::new();
+    register_all(&mut reg);
+    let interp = Interpreter::new(reg);
+    let mut world = setup_world();
+    // FRA 省1: 前线师(低org易崩) + 预备队师(满org, 超宽进预备队)
+    // 用大宽度让第2个FRA师进预备队: combat_width=40 × 2 = 80 > 70
+    run_setup(&mut world, &interp, r#"
+        _setup = {
+            create_division = { owner = GER location = 2 equipment = medium_tank battalions = 7 }
+            create_division = { owner = FRA location = 1 soft_attack = 0 defense = 5 max_org = 10 combat_width = 40 equipment = infantry_equipment }
+            create_division = { owner = FRA location = 1 soft_attack = 0 defense = 5 max_org = 10 combat_width = 40 equipment = infantry_equipment }
+        }
+    "#);
+    // 找预备队师(第2个FRA师, 应在reserve)
+    let reserve_fra = world.divisions.values()
+        .filter(|d| d.owner_tag == "FRA")
+        .last().unwrap().id;
+    // GER 进攻省1
+    let move_effs = hoi4_clone::ast::lower::lower_effects(
+        &hoi4_clone::parser::parse("move_division = { division = 1 target = 1 }").unwrap()
+    );
+    interp.run(&move_effs, &mut world);
+    // 预备队师 org 应满(没参战)
+    let org_before = world.divisions.get(&reserve_fra).unwrap().org;
+    assert!((org_before - 10.0).abs() < 1e-9, "预备队师初始org应为10");
+    // 推进让前线崩 → 带溃预备队
+    GameClock::advance(&interp, &mut world, 40);
+    // 带溃师应存活 + org 保持(非归零)
+    let routed = world.divisions.get(&reserve_fra);
+    assert!(routed.is_some(), "带溃师应存活(撤退非歼灭)");
+    let routed = routed.unwrap();
+    // 带溃师没参战, org 应保持(非归零); 到达后方省后 retreat 清(org满)
+    assert!(
+        routed.org > 0.0,
+        "带溃师 org 应保持(非归零): 实际 {}", routed.org
+    );
+}
