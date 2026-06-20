@@ -116,18 +116,30 @@ fn split_if(b: &Block) -> (Trigger, Vec<Effect>, Vec<Effect>) {
     let mut cond = Trigger::Always(true);
     let mut then = Vec::new();
     let mut els = Vec::new();
+    // else_if 需要单独收集:它本身是嵌套 If(带自己的 limit),不能平铺
+    let mut else_if_block: Option<&Block> = None;
     for f in &b.fields {
         if f.key == "limit" {
             if let Value::Block(lb) = &f.value {
                 cond = lower_trigger(lb);
             }
-        } else if f.key == "else" || f.key == "else_if" {
+        } else if f.key == "else" {
             if let Value::Block(eb) = &f.value {
                 els = lower_effects(eb);
+            }
+        } else if f.key == "else_if" {
+            // HOI4: else_if = { limit={...} <body> } 本身是一个嵌套条件
+            if let Value::Block(eb) = &f.value {
+                else_if_block = Some(eb);
             }
         } else {
             then.extend(lower_field_as_effect(f));
         }
+    }
+    // 把 else_if 转成嵌套 If 放入 els(它有自己的 limit)
+    if let Some(eb) = else_if_block {
+        let (ei_cond, ei_then, ei_els) = split_if(eb);
+        els = vec![Effect::If { cond: ei_cond, then: ei_then, els: ei_els }];
     }
     (cond, then, els)
 }

@@ -18,6 +18,9 @@ fn reward_block(b: &hoi4_clone::parser::Block) -> &hoi4_clone::parser::Block {
 #[test]
 fn focus_add_pp_then_stability() {
     // 模拟一个国策 completion_reward: 加 150 政治点, 若 pp>=150 则加稳定度
+    // 注意: limit 里的 political_power >= 150 是裸比较,会被降级成真正的 Trigger::Compare
+    //       在 interp.eval 中读 world.get_var("political_power")。由于 add_political_power 先执行
+    //       把 pp 设为 150, 满足 >=150, 所以 stability 被加 0.05。
     let src = r#"
         completion_reward = {
             add_political_power = 150
@@ -39,8 +42,37 @@ fn focus_add_pp_then_stability() {
     interp.run(&effs, &mut world);
 
     assert!((world.get_var("political_power") - 150.0).abs() < 1e-9);
-    // limit 用 Check(默认 true) 不是 Compare, 但 if 的 cond 在 limit 块里是 Check → 默认 true → 执行 then
     assert!((world.get_var("stability") - 0.05).abs() < 1e-9);
+}
+
+#[test]
+fn compare_trigger_false_branch() {
+    // 反向用例:阈值 200,但 pp 只加到 150,比较应失败,stability 保持 0
+    // 这证明 Trigger::Compare 真的被求值(而非恒 true)
+    let src = r#"
+        completion_reward = {
+            add_political_power = 150
+            if = {
+                limit = { political_power >= 200 }
+                add_stability = 0.05
+            }
+        }
+    "#;
+    let b = parse(src).unwrap();
+    let inner = reward_block(&b);
+    let effs = lower_effects(inner);
+
+    let mut reg = Registry::new();
+    register_all(&mut reg);
+    let interp = Interpreter::new(reg);
+    let mut world = World::new();
+    interp.run(&effs, &mut world);
+
+    assert!((world.get_var("political_power") - 150.0).abs() < 1e-9);
+    assert!(
+        world.get_var("stability").abs() < 1e-9,
+        "pp=150 < 200, 比较应失败, stability 应保持 0"
+    );
 }
 
 #[test]

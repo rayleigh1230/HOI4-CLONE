@@ -1,8 +1,6 @@
 //! 变量类命令注册
 use crate::ast::Arg;
 use crate::runtime::Registry;
-#[allow(unused_imports)]
-use crate::runtime::World;
 
 pub fn register(reg: &mut Registry) {
     reg.register("set_stability", |w, a| {
@@ -54,6 +52,7 @@ pub fn register(reg: &mut Registry) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::World;
 
     #[test]
     fn t_add_stability_cmd() {

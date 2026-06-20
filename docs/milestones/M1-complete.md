@@ -43,6 +43,22 @@ TDD 集成测试捕获了这一盲点,parser/lower 已扩展支持。
 - ~500 个 effect/trigger 命令仅实现 7 个(M2-M4 渐进补充)
 - 主循环(hourly tick)未实现(M2 搭建)
 
+## ⚠️ M2 开工前的硬前置条件(来自 M1 最终 code review)
+
+reviewer 批准 M1 作为基线,但明确指出:**不要在当前 Registry/lower 之上直接堆 80 个命令**。
+M2 第一步必须先做三项基础设施重构:
+
+1. **结构化命令参数**(P0): `Arg::Str("k=v")` hack 在嵌套块参数上会丢数据。
+   `Effect::Command`/`Arg` 需能承载嵌套结构(`Arg::Block(Vec<(String,Arg)>)` 或参数 AST),
+   替换 `lower.rs` L57-64 的扁平化。否则 `add_equipment_production` 等带嵌套参数的命令会断裂。
+2. **Trigger Registry**(P0): 当前 `Registry` 只有 `effects` 表,`Trigger::Check` 在 interp 恒返回 true。
+   需加 `triggers` 表 + 求值分发,让 spec §4.3 的 `reg.trigger(...)` 落地。
+3. **可失败命令签名**(P0): `EffectFn = fn(&mut World, &[Arg]) -> ()` 不能返回错误。
+   M2 战斗命令需要失败语义,改 `Result` 或至少错误上报。
+
+P1-P2 可在 M2 推进中并行清理(else_if 已在 review 后修复;parser 行号待补;
+`all_`/`random_` 前缀误路由待 M2 区分 trigger/effect 作用域)。
+
 ## 环境备注
 
 - 工具链: `stable-x86_64-pc-windows-gnu`(当前环境无 MSVC 链接器,GNU 工具链自带 rust-mingw 解决)
