@@ -173,7 +173,12 @@ function refresh() {
   container.innerHTML = '';
   for (const d of state.divisions) {
     const card = document.createElement('div');
-    const status = d.annihilated ? '💀 歼灭' : (d.retreating ? '🚩 撤退' : (d.org <= 0 ? '⚠️ 破阵' : '战斗中'));
+    let status;
+    if (d.annihilated) status = '💀 歼灭';
+    else if (d.dest) status = '🚩 撤退中';
+    else if (d.retreating) status = '🔄 恢复中';
+    else if (d.org <= 0) status = '⚠️ 破阵';
+    else status = '🛡️ 驻扎';
     card.className = 'div-card ' + (d.owner === 'GER' ? 'attacker' : 'defender') + (d.annihilated || d.retreating ? ' broken' : '');
     const orgPct = d.max_org > 0 ? (d.org / d.max_org * 100) : 0;
     const strPct = d.max_str > 0 ? (d.str / d.max_str * 100) : 0;

@@ -449,3 +449,74 @@ fn retreating_division_moves_to_friendly_province() {
         "FRA 应撤退到邻接己方省20, 实际在 {}", fra.location_province
     );
 }
+
+#[test]
+fn attacker_captures_province_on_victory() {
+    // 攻方胜(守方全退) → 攻方占领战斗省份
+    use hoi4_clone::runtime::GameClock;
+    let mut reg = Registry::new();
+    register_all(&mut reg);
+    let interp = Interpreter::new(reg);
+    let mut world = World::new();
+    world.player_tag = "GER".into();
+    world.countries.insert("GER".into(), Default::default());
+    world.countries.insert("FRA".into(), Default::default());
+    // 省1(FRA控制, 战场) 邻接省20(FRA后方, 让FRA能撤退→战斗因撤退结束→攻方占省1)
+    world.provinces.insert(1, hoi4_clone::runtime::Province {
+        id: 1, owner: "FRA".into(), controller: "FRA".into(),
+        terrain: "plains".into(), neighbors: vec![20],
+    });
+    world.provinces.insert(20, hoi4_clone::runtime::Province {
+        id: 20, owner: "FRA".into(), controller: "FRA".into(),
+        terrain: "plains".into(), neighbors: vec![1],
+    });
+    run_setup(&mut world, &interp, r#"
+        _setup = {
+            create_division = { owner = GER location = 1 equipment = medium_tank battalions = 7 }
+            create_division = { owner = FRA location = 1 soft_attack = 0 defense = 200 max_org = 30 max_strength = 100 equipment = infantry_equipment }
+            start_battle = { attacker = GER defender = FRA province = 1 }
+        }
+    "#);
+    assert_eq!(world.provinces.get(&1).unwrap().controller, "FRA", "开战前省1属FRA");
+    GameClock::advance(&interp, &mut world, 40);
+    // FRA 撤退 → 战斗结束 → GER 占领省1
+    assert_eq!(
+        world.provinces.get(&1).unwrap().controller, "GER",
+        "攻方胜应占领省1, 实际: {}", world.provinces.get(&1).unwrap().controller
+    );
+}
+
+#[test]
+fn marching_division_loses_org() {
+    // 移动中的师每小时掉 org(非恢复)
+    use hoi4_clone::runtime::GameClock;
+    let mut reg = Registry::new();
+    register_all(&mut reg);
+    let interp = Interpreter::new(reg);
+    let mut world = World::new();
+    world.player_tag = "GER".into();
+    world.countries.insert("GER".into(), Default::default());
+    world.provinces.insert(1, hoi4_clone::runtime::Province {
+        id: 1, owner: "GER".into(), controller: "GER".into(),
+        terrain: "plains".into(), neighbors: vec![2],
+    });
+    world.provinces.insert(2, hoi4_clone::runtime::Province {
+        id: 2, owner: "GER".into(), controller: "GER".into(),
+        terrain: "plains".into(), neighbors: vec![1],
+    });
+    run_setup(&mut world, &interp, r#"
+        _setup = {
+            create_division = { owner = GER location = 1 equipment = infantry_equipment battalions = 7 }
+        }
+    "#);
+    let did = world.divisions.values().next().unwrap().id;
+    let org_before = world.divisions.get(&did).unwrap().org;
+    // 手动设 destination 让师移动
+    world.divisions.get_mut(&did).unwrap().destination = Some(2);
+    GameClock::advance(&interp, &mut world, 3); // 移动中 3 小时
+    let org_after = world.divisions.get(&did).unwrap().org;
+    assert!(
+        org_after < org_before,
+        "移动中 org 应下降(每小时-0.2): before={org_before} after={org_after}"
+    );
+}

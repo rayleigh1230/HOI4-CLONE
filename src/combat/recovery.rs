@@ -6,6 +6,8 @@ use crate::runtime::World;
 
 /// 每日组织度恢复率(占 max_org 的比例)。约 12%/天 → 一周恢复满。
 const DAILY_ORG_RECOVERY_RATE: f64 = 0.12;
+/// 行军中每小时组织度损失(原版 HOURLY_ORG_MOVEMENT_IMPACT=-0.2)
+const HOURLY_ORG_MOVEMENT_IMPACT: f64 = -0.2;
 
 /// 对所有非战斗师执行组织度恢复(每小时调用)
 pub fn recover_org(world: &mut World) {
@@ -19,6 +21,11 @@ pub fn recover_org(world: &mut World) {
     for div in world.divisions.values_mut() {
         if in_combat.contains(&div.id) {
             continue; // 战斗中不恢复
+        }
+        // 移动中(含撤退行军): 每小时掉 org(HOURLY_ORG_MOVEMENT_IMPACT=-0.2), 不恢复
+        if div.destination.is_some() {
+            div.org = (div.org + HOURLY_ORG_MOVEMENT_IMPACT).max(0.0);
+            continue;
         }
         if div.org >= div.max_org {
             // 恢复满了, 清除撤退标志(师重回可用状态)

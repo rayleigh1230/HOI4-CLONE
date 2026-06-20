@@ -26,6 +26,10 @@ pub fn reinforce_all(world: &mut World) {
             Some(d) => d,
             None => continue,
         };
+        // 移动中(含撤退行军)的师不增援(行军中无法补员, 到达后才行)
+        if div.destination.is_some() {
+            continue;
+        }
         let tag = div.owner_tag.clone();
         let mut div_transfer: Vec<(String, f64)> = Vec::new();
         for (eq, need) in &div.equipment_need {
@@ -82,6 +86,9 @@ pub fn reinforce_all(world: &mut World) {
             Some(d) => d,
             None => continue,
         };
+        if div.destination.is_some() {
+            continue; // 移动中不增援
+        }
         let shortage = (div.manpower_need - div.manpower_held).max(0.0);
         if shortage <= 0.0 {
             continue;

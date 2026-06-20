@@ -230,19 +230,21 @@ pub fn resolve_all_battles(world: &mut World) {
 ///
 /// 一方全退(歼灭或撤退) → 战斗结束
 fn cleanup_battles(world: &mut World) {
-    let battle_specs: Vec<(usize, Vec<u64>, Vec<u64>)> = world
+    let battle_specs: Vec<(usize, u32, Vec<u64>, Vec<u64>)> = world
         .battles
         .iter()
         .enumerate()
-        .map(|(i, b)| (i, b.attackers.clone(), b.defenders.clone()))
+        .map(|(i, b)| (i, b.province, b.attackers.clone(), b.defenders.clone()))
         .collect();
 
     let mut battles_to_remove: Vec<usize> = Vec::new();
     let mut battle_updates: Vec<(usize, Vec<u64>, Vec<u64>)> = Vec::new();
+    // 占地记录: (province_id, winner_tag) — 守方全退→攻方占省
+    let mut province_captures: Vec<(u32, String)> = Vec::new();
     let mut to_annihilate: Vec<u64> = Vec::new();
     let mut to_mark_retreat: Vec<u64> = Vec::new();
 
-    for (idx, atk_ids, def_ids) in &battle_specs {
+    for (idx, province, atk_ids, def_ids) in &battle_specs {
         // 分类每方: 退出(歼灭/撤退)的移出, 存活的保留
         let classify = |ids: &[u64]| -> (Vec<u64>, Vec<u64>, Vec<u64>) {
             let mut alive = Vec::new();
@@ -267,6 +269,12 @@ fn cleanup_battles(world: &mut World) {
 
         if atk_alive.is_empty() || def_alive.is_empty() {
             battles_to_remove.push(*idx);
+            // 占地: 守方全退/歼灭 → 攻方占领省份(攻方存活时)
+            if def_alive.is_empty() && !atk_alive.is_empty() {
+                if let Some(winner) = world.divisions.get(&atk_alive[0]) {
+                    province_captures.push((*province, winner.owner_tag.clone()));
+                }
+            }
         } else if atk_alive.len() < atk_ids.len() || def_alive.len() < def_ids.len() {
             battle_updates.push((*idx, atk_alive, def_alive));
         }
@@ -297,6 +305,13 @@ fn cleanup_battles(world: &mut World) {
     to_annihilate.extend(surrounded);
     for id in to_annihilate {
         world.divisions.remove(&id);
+    }
+    // 占地: 攻方胜 → 占领战斗省份
+    for (province, winner) in province_captures {
+        if let Some(p) = world.provinces.get_mut(&province) {
+            p.controller = winner.clone();
+            p.owner = winner;
+        }
     }
     // 应用战斗更新
     for (idx, atk, def) in battle_updates {
