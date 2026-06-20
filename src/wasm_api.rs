@@ -67,6 +67,22 @@ pub unsafe extern "C" fn engine_set_player(tag_ptr: *const u8, tag_len: usize) {
     });
 }
 
+/// 设置省份控制权(前端点省份改归属 = 设定包围)
+#[no_mangle]
+pub unsafe extern "C" fn engine_set_province_controller(
+    province_id: u32,
+    tag_ptr: *const u8,
+    tag_len: usize,
+) {
+    let tag = unsafe { ptr_to_str(tag_ptr, tag_len) };
+    ENGINE.with(|e| {
+        if let Some(p) = e.borrow_mut().world.provinces.get_mut(&province_id) {
+            p.controller = tag.to_string();
+            p.owner = tag.to_string();
+        }
+    });
+}
+
 /// 运行 setup 脚本(建师/开战等)。返回 0 成功, 非 0 失败
 #[no_mangle]
 pub unsafe extern "C" fn engine_run_setup(script_ptr: *const u8, script_len: usize) -> u32 {
@@ -149,7 +165,25 @@ fn serialize_state(world: &World) -> String {
     }
     s.push_str("],\"battles\":");
     s.push_str(&world.battles.len().to_string());
-    s.push('}');
+    // 省份(节点图用: id/controller/neighbors)
+    s.push_str(",\"provinces\":[");
+    let mut pfirst = true;
+    for p in world.provinces.values() {
+        if !pfirst { s.push(','); }
+        pfirst = false;
+        s.push_str(&format!(
+            "{{\"id\":{},\"controller\":\"{}\",\"neighbors\":[",
+            p.id, p.controller
+        ));
+        let mut nfirst = true;
+        for n in &p.neighbors {
+            if !nfirst { s.push(','); }
+            nfirst = false;
+            s.push_str(&n.to_string());
+        }
+        s.push_str("]}");
+    }
+    s.push_str("]}");
     s
 }
 

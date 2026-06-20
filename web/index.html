@@ -19,6 +19,8 @@
   button.secondary:hover { background: #1a4a80; }
   .status-bar { font-size: 12px; color: #7ec8e3; margin: 8px 0; }
   .divisions { display: flex; flex-direction: column; gap: 10px; }
+  #mapCanvas { width: 100%; height: 280px; background: #0a0a1a; border: 1px solid #0f3460; border-radius: 4px; cursor: pointer; margin-bottom: 10px; }
+  .map-hint { font-size: 11px; color: #888; margin-bottom: 8px; }
   .div-card { background: #0a0a1a; border-left: 4px solid #0f3460; border-radius: 4px; padding: 10px; }
   .div-card.attacker { border-left-color: #e94560; }
   .div-card.defender { border-left-color: #16c79a; }
@@ -73,6 +75,8 @@ start_battle = { attacker = GER defender = FRA province = 1 }
 
   <div class="panel">
     <h2>🪖 战场态势</h2>
+    <canvas id="mapCanvas"></canvas>
+    <div class="map-hint">💡 点击省份切换控制权(设定包围)</div>
     <div class="battle-info" id="battleInfo"></div>
     <div class="divisions" id="divisions"></div>
   </div>
@@ -202,7 +206,113 @@ function refresh() {
       </div>`;
     container.appendChild(card);
   }
+  drawMap();
 }
+
+// === 节点图 Canvas ===
+const TAG_COLORS = { GER: '#e94560', FRA: '#16c79a' };
+let canvas, ctx;
+
+function provincePos(id, allIds, w, h) {
+  // 省份环形排布; 省1居中(战场)
+  if (id === 1) return { x: w / 2, y: h / 2 };
+  const idx = allIds.indexOf(id);
+  const others = allIds.filter(x => x !== 1);
+  const oi = others.indexOf(id);
+  const n = others.length;
+  const r = Math.min(w, h) * 0.35;
+  const angle = (oi / Math.max(n, 1)) * Math.PI * 2 - Math.PI / 2;
+  return { x: w / 2 + Math.cos(angle) * r, y: h / 2 + Math.sin(angle) * r };
+}
+
+function drawMap() {
+  canvas = document.getElementById('mapCanvas');
+  if (!canvas) return;
+  const dpr = window.devicePixelRatio || 1;
+  const W = canvas.clientWidth, H = canvas.clientHeight;
+  canvas.width = W * dpr; canvas.height = H * dpr;
+  ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, W, H);
+
+  const state = getState();
+  if (!state.provinces || state.provinces.length === 0) return;
+  const ids = state.provinces.map(p => p.id);
+  const pos = {};
+  state.provinces.forEach(p => { pos[p.id] = provincePos(p.id, ids, W, H); });
+
+  // 邻接连线(虚线)
+  ctx.strokeStyle = '#0f3460'; ctx.lineWidth = 1.5; ctx.setLineDash([4, 4]);
+  state.provinces.forEach(p => {
+    p.neighbors.forEach(n => {
+      if (pos[p.id] && pos[n]) {
+        ctx.beginPath();
+        ctx.moveTo(pos[p.id].x, pos[p.id].y);
+        ctx.lineTo(pos[n].x, pos[n].y);
+        ctx.stroke();
+      }
+    });
+  });
+  ctx.setLineDash([]);
+
+  // 省份圆圈
+  state.provinces.forEach(p => {
+    const c = pos[p.id];
+    const color = TAG_COLORS[p.controller] || '#666';
+    ctx.fillStyle = color + '33';
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(c.x, c.y, 26, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#fff'; ctx.font = '12px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText('省' + p.id, c.x, c.y + 4);
+    ctx.fillStyle = color; ctx.font = '9px sans-serif';
+    ctx.fillText(p.controller, c.x, c.y - 18);
+  });
+
+  // 部队图标(按 location 定位; 撤退中按 dest+progress 插值)
+  state.divisions.forEach(d => {
+    let bx, by;
+    if (d.dest && pos[d.loc] && pos[d.dest]) {
+      // 撤退/行军中: 沿连线插值(progress 0-1)
+      const p1 = pos[d.loc], p2 = pos[d.dest];
+      bx = p1.x + (p2.x - p1.x) * 0.5; // 简化:中点(精确进度需 serialize)
+      by = p1.y + (p2.y - p1.y) * 0.5;
+    } else if (pos[d.loc]) {
+      bx = pos[d.loc].x; by = pos[d.loc].y;
+    } else { return; }
+    const color = TAG_COLORS[d.owner] || '#fff';
+    ctx.fillStyle = d.annihilated ? '#444' : color;
+    ctx.fillRect(bx - 6, by - 6, 12, 12);
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 1;
+    ctx.strokeRect(bx - 6, by - 6, 12, 12);
+    ctx.fillStyle = '#fff'; ctx.font = '8px sans-serif';
+    ctx.fillText(d.owner, bx, by + 18);
+  });
+}
+
+// 点击省份切换控制权(GER<->FRA, 设定包围)
+document.addEventListener('click', (e) => {
+  if (!canvas || !ctx) return;
+  if (e.target.id !== 'mapCanvas') return;
+  const rect = canvas.getBoundingClientRect();
+  const x = e.clientX - rect.left, y = e.clientY - rect.top;
+  const state = getState();
+  const ids = state.provinces.map(p => p.id);
+  const W = canvas.clientWidth, H = canvas.clientHeight;
+  for (const p of state.provinces) {
+    const pos = provincePos(p.id, ids, W, H);
+    if (Math.hypot(pos.x - x, pos.y - y) < 26) {
+      const newTag = p.controller === 'GER' ? 'FRA' : 'GER';
+      const tagBytes = new TextEncoder().encode(newTag);
+      const ptr = wasm.exports.engine_alloc(tagBytes.length);
+      new Uint8Array(wasm.exports.memory.buffer).set(tagBytes, ptr);
+      wasm.exports.engine_set_province_controller(p.id, ptr, tagBytes.length);
+      log(`省${p.id} 控制权 → ${newTag}`);
+      refresh();
+      return;
+    }
+  }
+});
 
 loadWasm();
 </script>
