@@ -216,26 +216,39 @@ pub fn register(reg: &mut Registry) {
             d.move_progress = 0.0;
             d.attacking = is_hostile; // 进军(敌方地块)=红
         }
-        // 有敌军防守 → 立刻开战(无敌军则直接进军占领)
+        // 有敌军防守 → 开战: 若目标省已有战斗则加入, 否则新建
         if !enemies.is_empty() {
-            let battle_id = w.next_battle_id;
-            w.next_battle_id += 1;
-            // 守方宽度分配: 超宽的进预备队
-            let mut frontline_d = Vec::new();
-            let mut reserve_d = Vec::new();
-            for eid in &enemies {
-                let w_div = w.divisions.get(eid).map(|d| d.combat_width).unwrap_or(0.0);
-                if crate::combat::width::can_join_frontline(w, &frontline_d, w_div) {
-                    frontline_d.push(*eid);
+            // 先查是否有现有战斗(只读, 得索引避免借用冲突)
+            let existing_idx = w.battles.iter().position(|b| b.province == target);
+            let div_width = w.divisions.get(&div_id).map(|d| d.combat_width).unwrap_or(0.0);
+            if let Some(bidx) = existing_idx {
+                // 加入已有战斗: 按宽度分攻方前线/预备队
+                let can_front = crate::combat::width::can_join_frontline(w, &w.battles[bidx].attackers, div_width);
+                if can_front {
+                    w.battles[bidx].attackers.push(div_id);
                 } else {
-                    reserve_d.push(*eid);
+                    w.battles[bidx].reserve_attackers.push(div_id);
                 }
+            } else {
+                // 新建战斗: 守方宽度分配
+                let mut frontline_d = Vec::new();
+                let mut reserve_d = Vec::new();
+                for eid in &enemies {
+                    let w_div = w.divisions.get(eid).map(|d| d.combat_width).unwrap_or(0.0);
+                    if crate::combat::width::can_join_frontline(w, &frontline_d, w_div) {
+                        frontline_d.push(*eid);
+                    } else {
+                        reserve_d.push(*eid);
+                    }
+                }
+                let battle_id = w.next_battle_id;
+                w.next_battle_id += 1;
+                w.battles.push(Battle {
+                    id: battle_id, province: target,
+                    attackers: vec![div_id], defenders: frontline_d,
+                    reserve_attackers: vec![], reserve_defenders: reserve_d,
+                });
             }
-            w.battles.push(Battle {
-                id: battle_id, province: target,
-                attackers: vec![div_id], defenders: frontline_d,
-                reserve_attackers: vec![], reserve_defenders: reserve_d,
-            });
         }
         Ok(())
     });

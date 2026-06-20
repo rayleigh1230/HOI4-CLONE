@@ -64,14 +64,20 @@
     <textarea id="script">create_province = { id = 1 owner = FRA neighbors = { 2 3 } }
 create_province = { id = 2 owner = GER neighbors = { 1 } }
 create_province = { id = 3 owner = FRA neighbors = { 1 } }
-add_equipment = { owner = GER type = medium_tank amount = 700 }
-add_equipment = { owner = FRA type = infantry_equipment amount = 700 }
-add_manpower = { owner = GER amount = 10000 }
-add_manpower = { owner = FRA amount = 10000 }
+add_equipment = { owner = GER type = medium_tank amount = 2100 }
+add_equipment = { owner = FRA type = infantry_equipment amount = 2100 }
+add_manpower = { owner = GER amount = 30000 }
+add_manpower = { owner = FRA amount = 30000 }
+create_division = { owner = GER location = 2 equipment = medium_tank battalions = 7 }
+create_division = { owner = GER location = 2 equipment = medium_tank battalions = 7 }
 create_division = { owner = GER location = 2 equipment = medium_tank battalions = 7 }
 create_division = { owner = FRA location = 1 equipment = infantry_equipment battalions = 7 }
-# 不自动开战, 用点选: 选GER师→点省1(敌方)进攻
-# 或点省3(己方)测试普通移动</textarea>
+create_division = { owner = FRA location = 1 equipment = infantry_equipment battalions = 7 }
+create_division = { owner = FRA location = 1 equipment = infantry_equipment battalions = 7 }
+# GER 3师(#1#2#3) 进攻省1(FRA 3师#4#5#6防守)
+move_division = { division = 1 target = 1 }
+move_division = { division = 2 target = 1 }
+move_division = { division = 3 target = 1 }</textarea>
     <div class="controls">
       <button onclick="loadScript()">应用场景</button>
       <button class="secondary" onclick="tick(1)">▶ 推进1小时</button>
