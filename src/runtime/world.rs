@@ -1,10 +1,12 @@
-//! World: 游戏状态(M2: 加 hour/player_tag/error_log/event_bus)
+//! World: 游戏状态(M3: 加实体存储 + 作用域栈)
 use crate::ast::Effect;
+use crate::runtime::entities::{Battle, Country, Division, Province, Scope};
 use crate::runtime::error::CmdError;
 use std::collections::HashMap;
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct World {
+    // M1/M2 字段
     pub vars: HashMap<String, f64>,
     pub flags: HashMap<String, bool>,
     pub strings: HashMap<String, String>,
@@ -12,12 +14,42 @@ pub struct World {
     pub player_tag: String,
     pub error_log: Vec<CmdError>,
     pub event_bus: HashMap<String, Vec<Effect>>,
+    // M3 实体存储
+    pub provinces: HashMap<u32, Province>,
+    pub countries: HashMap<String, Country>,
+    pub divisions: HashMap<u64, Division>,
+    pub battles: Vec<Battle>,
+    pub scope_stack: Vec<Scope>,
+    pub next_division_id: u64,
+    pub next_battle_id: u64,
+}
+
+impl Default for World {
+    fn default() -> Self {
+        Self {
+            vars: Default::default(),
+            flags: Default::default(),
+            strings: Default::default(),
+            hour: 0,
+            player_tag: String::new(),
+            error_log: Vec::new(),
+            event_bus: Default::default(),
+            provinces: Default::default(),
+            countries: Default::default(),
+            divisions: Default::default(),
+            battles: Vec::new(),
+            scope_stack: vec![Scope::Root],
+            next_division_id: 1,
+            next_battle_id: 1,
+        }
+    }
 }
 
 impl World {
     pub fn new() -> Self {
         Self::default()
     }
+    // M1/M2 方法
     pub fn set_var(&mut self, k: &str, v: f64) {
         self.vars.insert(k.to_string(), v);
     }
@@ -41,16 +73,40 @@ impl World {
         self.strings.get(k).map(|s| s.as_str()).unwrap_or("")
     }
 
-    /// 注册事件钩子
+    // M2 事件钩子
     pub fn on(&mut self, event: &str, effs: Vec<Effect>) {
         self.event_bus.entry(event.to_string()).or_default().extend(effs);
     }
-    /// 触发事件钩子
     pub fn fire_event(&mut self, interp: &crate::runtime::Interpreter, event: &str) {
         if let Some(effs) = self.event_bus.get(event) {
             let effs = effs.clone();
             interp.run(&effs, self);
         }
+    }
+
+    // M3 作用域辅助
+    pub fn current_scope(&self) -> Scope {
+        self.scope_stack.last().cloned().unwrap_or(Scope::Root)
+    }
+    /// 从栈顶往下找最近的国家作用域
+    pub fn current_country(&self) -> Option<&str> {
+        self.scope_stack.iter().rev().find_map(|s| s.country_tag())
+    }
+
+    // M3 实体管理
+    pub fn add_division(&mut self, mut d: Division) -> u64 {
+        d.id = self.next_division_id;
+        self.next_division_id += 1;
+        let id = d.id;
+        self.divisions.insert(id, d);
+        id
+    }
+    pub fn divisions_of(&self, tag: &str) -> Vec<u64> {
+        self.divisions
+            .values()
+            .filter(|d| d.owner_tag == tag)
+            .map(|d| d.id)
+            .collect()
     }
 }
 
@@ -84,5 +140,24 @@ mod tests {
         assert!(w.error_log.is_empty());
         assert_eq!(w.hour, 0);
         assert!(w.player_tag.is_empty());
+    }
+    #[test]
+    fn t_m3_scope_stack_starts_root() {
+        let w = World::new();
+        assert!(matches!(w.current_scope(), Scope::Root));
+    }
+    #[test]
+    fn t_add_division_assigns_id() {
+        let mut w = World::new();
+        let d = Division {
+            id: 0, owner_tag: "GER".into(), location_province: 1,
+            soft_attack: 10.0, hard_attack: 1.0, defense: 20.0, breakthrough: 5.0,
+            armor: 0.0, piercing: 5.0, hardness: 0.0, combat_width: 10.0,
+            max_org: 60.0, org: 60.0, max_strength: 20.0, strength: 20.0,
+        };
+        let id = w.add_division(d);
+        assert_eq!(id, 1);
+        assert_eq!(w.next_division_id, 2);
+        assert_eq!(w.divisions_of("GER").len(), 1);
     }
 }
