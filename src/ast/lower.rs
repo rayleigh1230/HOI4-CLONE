@@ -51,16 +51,17 @@ fn lower_field_as_effect(f: &Field) -> Vec<Effect> {
             out.push(Effect::Random { table });
         }
         (k, Value::Scalar(s)) => {
-            out.push(Effect::Command { name: k.clone(), args: vec![parse_arg(s)] });
+            // 位置参数用空 key
+            out.push(Effect::Command { name: k.clone(), params: vec![(String::new(), parse_arg(s))] });
         }
-        // 命令带块参数,如 add_to_variable = { x = 0.05 }
+        // 命令带块参数,如 add_to_variable = { x = 0.05 }: 命名字段, 嵌套块递归(P0-1 修复)
         (k, Value::Block(inner)) => {
-            let args = inner
+            let params = inner
                 .fields
                 .iter()
-                .map(|f| Arg::Str(format!("{}={}", f.key, scalar_str(&f.value))))
+                .map(|f| (f.key.clone(), parse_value(&f.value)))
                 .collect();
-            out.push(Effect::Command { name: k.clone(), args });
+            out.push(Effect::Command { name: k.clone(), params });
         }
     }
     out
@@ -84,7 +85,7 @@ fn lower_field_as_trigger(f: &Field) -> Trigger {
                     ">" => CompareOp::Gt,
                     "<" => CompareOp::Lt,
                     "<>" => CompareOp::Ne,
-                    _ => return Trigger::Check { name: k.clone(), args: vec![parse_arg(s)] },
+                    _ => return Trigger::Check { name: k.clone(), args: vec![(String::new(), parse_arg(s))] },
                 };
                 return Trigger::Compare {
                     lhs: k.clone(),
@@ -93,7 +94,7 @@ fn lower_field_as_trigger(f: &Field) -> Trigger {
                 };
             }
             // 简单形式: tag = GER → Check
-            Trigger::Check { name: k.clone(), args: vec![parse_arg(s)] }
+            Trigger::Check { name: k.clone(), args: vec![(String::new(), parse_arg(s))] }
         }
         _ => Trigger::Always(true),
     }
@@ -172,10 +173,16 @@ fn parse_arg(s: &str) -> Arg {
     Arg::Str(s.trim_matches('"').to_string())
 }
 
-fn scalar_str(v: &Value) -> String {
+/// 把 Value 递归转 Arg, 嵌套块 → Arg::Block (P0-1: 不再扁平化丢数据)
+fn parse_value(v: &Value) -> Arg {
     match v {
-        Value::Scalar(s) => s.clone(),
-        _ => String::new(),
+        Value::Scalar(s) => parse_arg(s),
+        Value::Block(b) => Arg::Block(
+            b.fields
+                .iter()
+                .map(|f| (f.key.clone(), parse_value(&f.value)))
+                .collect(),
+        ),
     }
 }
 
@@ -190,9 +197,9 @@ mod tests {
         let effs = lower_effects(&b);
         assert_eq!(effs.len(), 1);
         match &effs[0] {
-            Effect::Command { name, args } => {
+            Effect::Command { name, params } => {
                 assert_eq!(name, "add_stability");
-                assert!(matches!(args[0], Arg::Num(n) if (n - 0.05).abs() < 1e-9));
+                assert!(matches!(params[0].1, Arg::Num(n) if (n - 0.05).abs() < 1e-9));
             }
             _ => panic!("应为 Command"),
         }
@@ -229,10 +236,27 @@ mod tests {
         let b = parse(r#"set_country_name = "Germany""#).unwrap();
         let effs = lower_effects(&b);
         match &effs[0] {
-            Effect::Command { args, .. } => {
-                assert!(matches!(&args[0], Arg::Str(s) if s == "Germany"))
+            Effect::Command { params, .. } => {
+                assert!(matches!(&params[0].1, Arg::Str(s) if s == "Germany"))
             }
             _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn t_lower_nested_block_param_no_data_loss() {
+        // P0-1 回归: 嵌套块参数不能丢数据
+        let src = "add_equipment_production = { equipment_type = infantry_weapons amount = 10 }";
+        let b = parse(src).unwrap();
+        let effs = lower_effects(&b);
+        match &effs[0] {
+            Effect::Command { name, params } => {
+                assert_eq!(name, "add_equipment_production");
+                assert_eq!(params.len(), 2);
+                let amount = params.iter().find(|(k, _)| k == "amount");
+                assert!(matches!(amount, Some((_, Arg::Num(n))) if (*n - 10.0).abs() < 1e-9));
+            }
+            _ => panic!("应为 Command"),
         }
     }
 }

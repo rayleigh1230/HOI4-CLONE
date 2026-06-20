@@ -1,4 +1,6 @@
-//! World: 最小游戏状态 (Task 6 实现)
+//! World: 游戏状态(M2: 加 hour/player_tag/error_log/event_bus)
+use crate::ast::Effect;
+use crate::runtime::error::CmdError;
 use std::collections::HashMap;
 
 #[derive(Debug, Default)]
@@ -6,8 +8,10 @@ pub struct World {
     pub vars: HashMap<String, f64>,
     pub flags: HashMap<String, bool>,
     pub strings: HashMap<String, String>,
-    /// 当前作用域栈(For 遍历时压入)。M1 只存 tag 字符串占位
-    pub scope_stack: Vec<String>,
+    pub hour: u64,
+    pub player_tag: String,
+    pub error_log: Vec<CmdError>,
+    pub event_bus: HashMap<String, Vec<Effect>>,
 }
 
 impl World {
@@ -36,6 +40,18 @@ impl World {
     pub fn get_string(&self, k: &str) -> &str {
         self.strings.get(k).map(|s| s.as_str()).unwrap_or("")
     }
+
+    /// 注册事件钩子
+    pub fn on(&mut self, event: &str, effs: Vec<Effect>) {
+        self.event_bus.entry(event.to_string()).or_default().extend(effs);
+    }
+    /// 触发事件钩子
+    pub fn fire_event(&mut self, interp: &crate::runtime::Interpreter, event: &str) {
+        if let Some(effs) = self.event_bus.get(event) {
+            let effs = effs.clone();
+            interp.run(&effs, self);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -48,7 +64,6 @@ mod tests {
         w.set_var("stability", 0.5);
         assert!((w.get_var("stability") - 0.5).abs() < 1e-9);
     }
-
     #[test]
     fn t_add_var() {
         let mut w = World::new();
@@ -56,12 +71,18 @@ mod tests {
         w.add_var("pp", 50.0);
         assert!((w.get_var("pp") - 150.0).abs() < 1e-9);
     }
-
     #[test]
     fn t_flag() {
         let mut w = World::new();
         assert!(!w.has_flag("done"));
         w.set_flag("done");
         assert!(w.has_flag("done"));
+    }
+    #[test]
+    fn t_m2_fields_default() {
+        let w = World::new();
+        assert!(w.error_log.is_empty());
+        assert_eq!(w.hour, 0);
+        assert!(w.player_tag.is_empty());
     }
 }

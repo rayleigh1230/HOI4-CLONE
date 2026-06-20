@@ -1,5 +1,6 @@
-//! Interpreter: 解释执行 Effect AST (Task 7 完整实现)
+//! Interpreter: 解释执行 Effect AST(M2: Result + Check 查表 + 错误收集)
 use crate::ast::{Arg, CompareOp, Effect, Trigger};
+use crate::runtime::error::CmdError;
 use crate::runtime::{Registry, World};
 
 pub struct Interpreter {
@@ -13,66 +14,91 @@ impl Interpreter {
 
     pub fn run(&self, effs: &[Effect], world: &mut World) {
         for e in effs {
-            self.run_one(e, world);
+            if let Err(err) = self.run_one(e, world) {
+                world.error_log.push(err);
+            }
         }
     }
 
-    fn run_one(&self, e: &Effect, world: &mut World) {
+    fn run_one(&self, e: &Effect, world: &mut World) -> Result<(), CmdError> {
         match e {
-            Effect::Command { name, args } => {
-                if let Some(f) = self.reg.get(name) {
-                    f(world, args);
-                } else {
+            Effect::Command { name, params } => match self.reg.get_effect(name) {
+                Some(f) => f(world, params),
+                None => {
                     eprintln!("[warn] 未注册的 effect: {name}");
+                    Err(CmdError::UnknownCommand(name.clone()))
                 }
-            }
+            },
             Effect::If { cond, then, els } => {
-                if self.eval(cond, world) {
+                if self.eval(cond, world)? {
                     self.run(then, world);
                 } else {
                     self.run(els, world);
                 }
+                Ok(())
             }
             Effect::ForEach { scope, filter, body } => {
-                // M1: 作用域遍历简化为"执行一次"(不实际枚举省份/国家)
-                if filter.as_ref().is_none_or(|t| self.eval(t, world)) {
-                    eprintln!("[info] {scope}: 执行作用域体(M1 简化为单次)");
+                let pass = match filter {
+                    Some(t) => self.eval(t, world)?,
+                    None => true,
+                };
+                if pass {
+                    eprintln!("[info] {scope}: 执行作用域体(M2 简化为单次)");
                     self.run(body, world);
                 }
+                Ok(())
             }
             Effect::Random { table } => {
                 if let Some((_, crate::ast::RandomPick::EventId(id))) = table.first() {
-                    eprintln!("[info] random_events 选中: {id} (M1 不触发事件)");
+                    eprintln!("[info] random_events 选中: {id} (M2 不触发事件)");
                 }
+                Ok(())
             }
         }
     }
 
-    pub fn eval(&self, t: &Trigger, world: &World) -> bool {
+    pub fn eval(&self, t: &Trigger, world: &World) -> Result<bool, CmdError> {
         match t {
-            Trigger::Always(b) => *b,
-            Trigger::And(parts) => parts.iter().all(|p| self.eval(p, world)),
-            Trigger::Or(parts) => parts.iter().any(|p| self.eval(p, world)),
-            Trigger::Not(inner) => !self.eval(inner, world),
+            Trigger::Always(b) => Ok(*b),
+            Trigger::And(parts) => {
+                for p in parts {
+                    if !self.eval(p, world)? {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
+            }
+            Trigger::Or(parts) => {
+                for p in parts {
+                    if self.eval(p, world)? {
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
+            }
+            Trigger::Not(inner) => Ok(!self.eval(inner, world)?),
             Trigger::Compare { lhs, op, rhs } => {
                 let l = world.get_var(lhs);
                 let r = match rhs {
                     Arg::Num(n) => *n,
-                    _ => return false,
+                    _ => return Ok(false),
                 };
-                match op {
+                Ok(match op {
                     CompareOp::Lt => l < r,
                     CompareOp::Gt => l > r,
                     CompareOp::Le => l <= r,
                     CompareOp::Ge => l >= r,
                     CompareOp::Eq => (l - r).abs() < 1e-9,
                     CompareOp::Ne => (l - r).abs() >= 1e-9,
+                })
+            }
+            Trigger::Check { name, args } => match self.reg.get_trigger(name) {
+                Some(f) => f(world, args),
+                None => {
+                    eprintln!("[debug] 未注册的 trigger: {name}, 默认 false");
+                    Ok(false)
                 }
-            }
-            Trigger::Check { name: _, args: _ } => {
-                // M1: 触发器命令(如 has_dlc/is_major)无法真实验证,默认 true 让脚本能跑通
-                true
-            }
+            },
         }
     }
 }

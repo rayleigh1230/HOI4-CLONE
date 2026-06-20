@@ -65,6 +65,8 @@ fn main() {
 
     let mut reg = Registry::new();
     register_all(&mut reg);
+    // demo stub trigger: 让 is_core 等判定通过,展示完整执行链
+    reg.register_trigger("is_core", |_, _| Ok(true));
     let interp = Interpreter::new(reg);
     let mut world = World::new();
 

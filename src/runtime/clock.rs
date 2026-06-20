@@ -1,0 +1,80 @@
+//! 游戏主循环: hourly tick + on_actions 钩子分发(spec §4.2.1)
+use crate::runtime::{Interpreter, World};
+
+pub struct GameClock;
+
+impl GameClock {
+    /// 推进游戏 1 小时, 触发相应钩子
+    pub fn tick(interp: &Interpreter, world: &mut World) {
+        world.hour += 1;
+        world.fire_event(interp, "on_hourly");
+        // M3 接入: combat::resolve / production::produce / movement::update
+        if world.hour.is_multiple_of(24) {
+            world.fire_event(interp, "on_daily");
+            world.fire_event(interp, &format!("on_daily_{}", world.player_tag));
+        }
+        if world.hour.is_multiple_of(24 * 7) {
+            world.fire_event(interp, "on_weekly");
+        }
+        if world.hour.is_multiple_of(24 * 30) {
+            world.fire_event(interp, "on_monthly");
+        }
+    }
+
+    /// 推进 n 小时
+    pub fn advance(interp: &Interpreter, world: &mut World, hours: u64) {
+        for _ in 0..hours {
+            Self::tick(interp, world);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ast::{Arg, Effect};
+    use crate::commands::register_all;
+    use crate::runtime::{Interpreter, Registry, World};
+
+    #[test]
+    fn t_daily_hook_fires_after_24_ticks() {
+        let mut reg = Registry::new();
+        register_all(&mut reg);
+        let interp = Interpreter::new(reg);
+        let mut world = World::new();
+        world.on(
+            "on_daily",
+            vec![Effect::Command {
+                name: "add_political_power".into(),
+                params: vec![("".into(), Arg::Num(1.0))],
+            }],
+        );
+        GameClock::advance(&interp, &mut world, 23);
+        assert!(world.get_var("political_power").abs() < 1e-9);
+        GameClock::tick(&interp, &mut world); // 第 24 次
+        assert!(
+            (world.get_var("political_power") - 1.0).abs() < 1e-9,
+            "24h 后 on_daily 应触发"
+        );
+    }
+
+    #[test]
+    fn t_hourly_fires_every_tick() {
+        let mut reg = Registry::new();
+        register_all(&mut reg);
+        let interp = Interpreter::new(reg);
+        let mut world = World::new();
+        world.on(
+            "on_hourly",
+            vec![Effect::Command {
+                name: "add_political_power".into(),
+                params: vec![("".into(), Arg::Num(0.5))],
+            }],
+        );
+        GameClock::advance(&interp, &mut world, 10);
+        assert!(
+            (world.get_var("political_power") - 5.0).abs() < 1e-9,
+            "10 tick 应加 5.0"
+        );
+    }
+}

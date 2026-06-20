@@ -3,8 +3,8 @@ use crate::ast::Arg;
 
 #[derive(Debug, Clone)]
 pub enum Trigger {
-    /// 基础判定: has_dlc("X"), is_major() 等
-    Check { name: String, args: Vec<Arg> },
+    /// 基础判定: has_dlc("X"), is_major() 等。位置参数用空 key
+    Check { name: String, args: Vec<(String, Arg)> },
     And(Vec<Trigger>),
     Or(Vec<Trigger>),
     Not(Box<Trigger>),

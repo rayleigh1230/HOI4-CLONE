@@ -78,6 +78,7 @@ fn compare_trigger_false_branch() {
 #[test]
 fn focus_afghanistan_real_fragment() {
     // 来自 afghanistan.txt AFG_expand_telegraph_network 的真实 completion_reward
+    // M2: 未注册的 trigger 默认 false, 故需注册 stub 让 limit 通过
     let src = r#"
         completion_reward = {
             every_owned_state = {
@@ -93,9 +94,11 @@ fn focus_afghanistan_real_fragment() {
 
     let mut reg = Registry::new();
     register_all(&mut reg);
+    // 注册测试用 stub trigger: is_owned_and_controlled_by 恒 true
+    reg.register_trigger("is_owned_and_controlled_by", |_, _| Ok(true));
     let interp = Interpreter::new(reg);
     let mut world = World::new();
-    interp.run(&effs, &mut world); // 不应 panic;limit 默认 true 所以执行
+    interp.run(&effs, &mut world);
 
     assert!(
         (world.get_var("AFG_state_development_production_speed") - 0.05).abs() < 1e-9,
