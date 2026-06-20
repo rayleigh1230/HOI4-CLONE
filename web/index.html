@@ -327,13 +327,11 @@ document.addEventListener('click', (e) => {
     if (Math.hypot(pos.x - x, pos.y - y) < 26) {
       // 选中了师 → 下移动令; 否则切换控制权
       if (selectedDivId) {
-        console.log('移动令: 师', selectedDivId, '→ 省', p.id, 'exports:', Object.keys(wasm.exports).filter(k=>k.includes('move')));
         try {
           wasm.exports.engine_move_division(selectedDivId, p.id);
           log(`师#${selectedDivId} → 省${p.id}`);
         } catch (e) {
           log('⚠️ 移动失败: ' + e.message);
-          console.error(e);
         }
         selectedDivId = null;
         refresh();

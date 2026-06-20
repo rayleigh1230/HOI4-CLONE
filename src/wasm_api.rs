@@ -84,8 +84,9 @@ pub unsafe extern "C" fn engine_set_province_controller(
 }
 
 /// 命令师移动到目标省(前端点选移动)
+/// 注: division_id 用 u32 而非 u64, 避免 JS 调用时 BigInt 转换问题
 #[no_mangle]
-pub extern "C" fn engine_move_division(division_id: u64, target: u32) {
+pub extern "C" fn engine_move_division(division_id: u32, target: u32) {
     ENGINE.with(|e| {
         let mut e = e.borrow_mut();
         let Engine { interp, world } = &mut *e;
