@@ -63,6 +63,11 @@ fn lower_field_as_effect(f: &Field) -> Vec<Effect> {
                 .collect();
             out.push(Effect::Command { name: k.clone(), params });
         }
+        // 裸值列表作为命令参数: neighbors = { 2 3 } → params 用空 key
+        (k, Value::List(items)) => {
+            let params = items.iter().map(|s| (String::new(), parse_arg(s))).collect();
+            out.push(Effect::Command { name: k.clone(), params });
+        }
     }
     out
 }
@@ -186,6 +191,10 @@ fn parse_value(v: &Value) -> Arg {
                 .iter()
                 .map(|f| (f.key.clone(), parse_value(&f.value)))
                 .collect(),
+        ),
+        // 裸值列表 { 2 3 } → Arg::Block 用空 key 存各项(命令端遍历取值)
+        Value::List(items) => Arg::Block(
+            items.iter().map(|s| (String::new(), parse_arg(s))).collect(),
         ),
     }
 }

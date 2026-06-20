@@ -17,6 +17,8 @@ pub struct Field {
 pub enum Value {
     Scalar(String),
     Block(Block),
+    /// 裸值列表: { 2 3 5 } (HOI4 数组语法, 如 neighbors/resources)
+    List(Vec<String>),
 }
 
 struct Cursor {
@@ -28,6 +30,26 @@ pub fn parse(src: &str) -> Result<Block, ParseError> {
     let toks = lex(src)?;
     let mut cur = Cursor { toks, pos: 0 };
     parse_block(&mut cur, false)
+}
+
+/// 解析裸值列表: 收集 Num/Str/Bool/Ident 直到 }(HOI4 数组语法 { 2 3 5 })
+fn parse_list(cur: &mut Cursor) -> Result<Vec<String>, ParseError> {
+    let mut items = Vec::new();
+    while cur.pos < cur.toks.len() {
+        match &cur.toks[cur.pos] {
+            Token::RBrace => {
+                cur.pos += 1;
+                return Ok(items);
+            }
+            Token::Num(n) => items.push(n.to_string()),
+            Token::Str(s) => items.push(s.clone()),
+            Token::Bool(b) => items.push(b.to_string()),
+            Token::Ident(s) => items.push(s.clone()),
+            _ => return Err(ParseError::Syntax { line: 0, msg: "裸值列表中的意外 token".into() }),
+        }
+        cur.pos += 1;
+    }
+    Err(ParseError::UnexpectedEof)
 }
 
 fn parse_block(cur: &mut Cursor, expect_rbrace: bool) -> Result<Block, ParseError> {
@@ -84,7 +106,16 @@ fn parse_block(cur: &mut Cursor, expect_rbrace: bool) -> Result<Block, ParseErro
                 let value = match cur.toks.get(cur.pos) {
                     Some(Token::LBrace) => {
                         cur.pos += 1;
-                        Value::Block(parse_block(cur, true)?)
+                        // peek 块内首个 token: Num/Str/Bool → 裸值列表; 否则 Block
+                        let is_list = matches!(
+                            cur.toks.get(cur.pos),
+                            Some(Token::Num(_)) | Some(Token::Str(_)) | Some(Token::Bool(_))
+                        );
+                        if is_list {
+                            Value::List(parse_list(cur)?)
+                        } else {
+                            Value::Block(parse_block(cur, true)?)
+                        }
                     }
                     Some(Token::Str(s)) => {
                         let v = s.clone();
@@ -163,5 +194,27 @@ mod tests {
         let b = parse(src).unwrap();
         let tree = &b.fields[0]; // focus_tree
         assert_eq!(tree.key, "focus_tree");
+    }
+
+    #[test]
+    fn t_bare_value_list() {
+        // HOI4 数组语法: neighbors = { 2 3 }
+        let src = "create_province = { id = 1 owner = FRA neighbors = { 2 3 } }";
+        let b = parse(src).unwrap();
+        let cp = &b.fields[0];
+        assert_eq!(cp.key, "create_province");
+        let inner = match &cp.value {
+            Value::Block(b) => b,
+            _ => panic!("应为块"),
+        };
+        let neighbors = inner.fields.iter().find(|f| f.key == "neighbors").unwrap();
+        match &neighbors.value {
+            Value::List(items) => {
+                assert_eq!(items.len(), 2);
+                assert_eq!(items[0], "2");
+                assert_eq!(items[1], "3");
+            }
+            _ => panic!("neighbors 应为 List"),
+        }
     }
 }
