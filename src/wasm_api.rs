@@ -175,8 +175,19 @@ fn serialize_state(world: &World) -> String {
             d.attacking, d.retreating, d.is_annihilated()
         ));
     }
-    s.push_str("],\"battles\":");
-    s.push_str(&world.battles.len().to_string());
+    s.push_str("],\"battles\":[");
+    let mut bfirst = true;
+    for b in &world.battles {
+        if !bfirst { s.push(','); }
+        bfirst = false;
+        s.push_str(&format!(
+            "{{\"id\":{},\"prov\":{},\"atk\":{},\"def\":{},\"res_atk\":{},\"res_def\":{}}}",
+            b.id, b.province,
+            b.attackers.len(), b.defenders.len(),
+            b.reserve_attackers.len(), b.reserve_defenders.len()
+        ));
+    }
+    s.push_str("]");
     // 省份(节点图用: id/controller/neighbors)
     s.push_str(",\"provinces\":[");
     let mut pfirst = true;

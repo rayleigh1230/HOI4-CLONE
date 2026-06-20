@@ -95,6 +95,7 @@ mod tests {
             province: 1,
             attackers: vec![did],
             defenders: vec![],
+            ..Default::default()
         });
         recover_org(&mut w);
         assert!((w.divisions.get(&did).unwrap().org - 30.0).abs() < 1e-9, "战斗中不应恢复");

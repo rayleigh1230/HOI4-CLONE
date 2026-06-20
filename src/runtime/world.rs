@@ -123,6 +123,15 @@ impl World {
             self.provinces.get(n).map(|p| p.controller == tag).unwrap_or(false)
         })
     }
+
+    // 战斗宽度(陆战循环)
+    /// 一组师占用的战斗宽度总和
+    pub fn used_width(&self, div_ids: &[u64]) -> f64 {
+        div_ids.iter()
+            .filter_map(|id| self.divisions.get(id))
+            .map(|d| d.combat_width)
+            .sum()
+    }
 }
 
 #[cfg(test)]

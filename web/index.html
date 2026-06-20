@@ -166,7 +166,15 @@ function getState() {
 function refresh() {
   const state = getState();
   document.getElementById('hourDisplay').textContent = `游戏时间: 第 ${state.hour} 小时`;
-  document.getElementById('battleInfo').textContent = `活跃战斗: ${state.battles} 场`;
+  const bi = document.getElementById('battleInfo');
+  if (state.battles && state.battles.length > 0) {
+    bi.innerHTML = state.battles.map(b =>
+      `⚔️省${b.prov}: 攻${b.atk}守${b.def}` +
+      ((b.res_atk || b.res_def) ? ` (预备:攻${b.res_atk||0}守${b.res_def||0})` : '')
+    ).join('<br>');
+  } else {
+    bi.textContent = '无活跃战斗';
+  }
 
   const container = document.getElementById('divisions');
   container.innerHTML = '';

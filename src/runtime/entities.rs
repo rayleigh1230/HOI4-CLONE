@@ -119,12 +119,15 @@ impl Division {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Battle {
     pub id: u64,
     pub province: u32,
     pub attackers: Vec<u64>,
     pub defenders: Vec<u64>,
+    /// 预备队(超宽度的师在此等候补位)
+    pub reserve_attackers: Vec<u64>,
+    pub reserve_defenders: Vec<u64>,
 }
 
 /// 作用域(M3: 枚举栈)
