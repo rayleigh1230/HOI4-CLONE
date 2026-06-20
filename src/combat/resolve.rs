@@ -227,6 +227,7 @@ pub fn resolve_all_battles(world: &mut World) {
 /// 战斗生命周期: 区分撤退(org0+HP有)和歼灭(HP0)
 /// - 歼灭: 从 world.divisions 删除师(番号撤销)
 /// - 撤退: 标 retreating, 移出当前战斗(师保留, 待撤邻省)
+///
 /// 一方全退(歼灭或撤退) → 战斗结束
 fn cleanup_battles(world: &mut World) {
     let battle_specs: Vec<(usize, Vec<u64>, Vec<u64>)> = world
