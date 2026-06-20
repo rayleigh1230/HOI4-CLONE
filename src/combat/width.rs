@@ -8,6 +8,23 @@ pub const BASE_COMBAT_WIDTH: f64 = 70.0;
 /// 每小时从预备队加入前线的概率(原版 REINFORCE_CHANCE)
 const REINFORCE_CHANCE: f64 = 0.02;
 
+/// 简单确定性伪随机: 基于(hour, div_id)哈希, 返回 [0,1)
+/// 不引入 rand crate, 但每个师每小时有稳定且分布均匀的"随机"值
+fn pseudo_random(seed: u64) -> f64 {
+    // xorshift 风格哈希, 映射到 [0,1)
+    let mut x = seed.wrapping_mul(2654435761);
+    x ^= x >> 15;
+    x = x.wrapping_mul(2246822519);
+    x ^= x >> 13;
+    (x % 10000) as f64 / 10000.0
+}
+
+/// 该师本小时是否通过增援概率判定(2%)
+fn reinforce_triggered(hour: u64, div_id: u64) -> bool {
+    let r = pseudo_random(hour * 100003 + div_id);
+    r < REINFORCE_CHANCE
+}
+
 /// 判断新师能否加入前线(加入后宽度是否<=70)
 pub fn can_join_frontline(world: &World, frontline: &[u64], new_div_width: f64) -> bool {
     let used = world.used_width(frontline);
@@ -25,16 +42,14 @@ pub fn reinforce_reserves(world: &mut World) {
         .collect();
 
     for (idx, res_atk, res_def) in battle_specs {
-        // 攻方预备队补位
+        let hour = world.hour;
+        // 攻方预备队补位: 每个师独立 2% 概率判定(原版 REINFORCE_CHANCE)
         let mut joined_atk = Vec::new();
         for div_id in &res_atk {
             let width = world.divisions.get(div_id).map(|d| d.combat_width).unwrap_or(0.0);
             let frontline = &world.battles[idx].attackers;
-            if can_join_frontline(world, frontline, width) {
-                // 简化: 不用真随机, 用固定概率(每2师补1个, 模拟2%累积)
-                // 真随机需引入 rand; M5 再加。这里用确定性: 预备队第1个补上
+            if can_join_frontline(world, frontline, width) && reinforce_triggered(hour, *div_id) {
                 joined_atk.push(*div_id);
-                break; // 每小时每方最多补1个(模拟低概率)
             }
         }
         // 守方预备队补位
@@ -42,9 +57,8 @@ pub fn reinforce_reserves(world: &mut World) {
         for div_id in &res_def {
             let width = world.divisions.get(div_id).map(|d| d.combat_width).unwrap_or(0.0);
             let frontline = &world.battles[idx].defenders;
-            if can_join_frontline(world, frontline, width) {
+            if can_join_frontline(world, frontline, width) && reinforce_triggered(hour, *div_id) {
                 joined_def.push(*div_id);
-                break;
             }
         }
         // 应用: 移出预备队, 加入前线
@@ -93,6 +107,7 @@ mod tests {
 
     #[test]
     fn t_reserve_reinforces_frontline() {
+        // 预备队补位: 2%概率/小时, 推进200小时必然触发
         let mut world = World::new();
         let d1 = wide_div("GER", 60.0); // 前线(占60宽)
         let d2 = wide_div("GER", 10.0); // 预备队
@@ -103,9 +118,13 @@ mod tests {
             attackers: vec![id1], defenders: vec![],
             reserve_attackers: vec![id2], reserve_defenders: vec![],
         });
-        // 前线60 + 预备队10 = 70, 可补位
-        reinforce_reserves(&mut world);
-        assert!(world.battles[0].attackers.contains(&id2), "预备队应补入前线");
+        // 推进200小时, 2%概率下几乎必然补位(期望4次)
+        for _ in 0..200 {
+            world.hour += 1;
+            reinforce_reserves(&mut world);
+            if world.battles[0].attackers.contains(&id2) { break; }
+        }
+        assert!(world.battles[0].attackers.contains(&id2), "200小时内预备队应补入前线(2%/h)");
         assert!(!world.battles[0].reserve_attackers.contains(&id2), "应移出预备队");
     }
 

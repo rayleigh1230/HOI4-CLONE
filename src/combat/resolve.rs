@@ -277,14 +277,19 @@ fn cleanup_battles(world: &mut World) {
         let atk_frontline_routed = atk_alive.is_empty();
         if def_frontline_routed || atk_frontline_routed {
             battles_to_remove.push(*idx);
-            // 守方前线崩 → 守方预备队带溃撤退 + 攻方占地(攻方有存活时)
+            // 守方前线崩 → 守方预备队带溃撤退
+            // 占地条件: 有攻方师已在该省(location==province, 非移动中) → 立即占地;
+            //           否则等攻方行军到达(由 advance_movement 处理)
             if def_frontline_routed {
-                // 预备队强制撤退
                 for rid in res_def {
                     routing_reserves.push(*rid);
                 }
-                // 占地
-                if !atk_alive.is_empty() || !res_atk.is_empty() {
+                // 检查是否有攻方师已在该省(已到达)
+                let attacker_present = (atk_alive.iter().chain(res_atk.iter()))
+                    .any(|aid| world.divisions.get(aid)
+                        .map(|d| d.location_province == *province && d.destination.is_none())
+                        .unwrap_or(false));
+                if attacker_present {
                     let winner_src = atk_alive.first().or(res_atk.first());
                     if let Some(wid) = winner_src {
                         if let Some(winner) = world.divisions.get(wid) {

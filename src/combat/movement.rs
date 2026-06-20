@@ -22,6 +22,9 @@ pub fn advance_movement(world: &mut World) {
         .filter_map(|(id, d)| d.destination.map(|_| *id))
         .collect();
 
+    // 第一阶段: 推进进度, 收集到达的师(释放借用)
+    struct Arrival { id: u64, dest: u32, owner: String, was_attacking: bool }
+    let mut arrivals: Vec<Arrival> = Vec::new();
     for id in moving {
         let Some(d) = world.divisions.get_mut(&id) else { continue };
         let rate = if d.retreating {
@@ -38,16 +41,29 @@ pub fn advance_movement(world: &mut World) {
                 d.move_progress = 0.0;
                 let was_attacking = d.attacking;
                 d.attacking = false;
-                // 占领: 改省份控制权 + 掉 org(仅进攻占领时)
-                if was_attacking {
-                    let owner = d.owner_tag.clone();
-                    if let Some(p) = world.provinces.get_mut(&dest) {
-                        p.controller = owner.clone();
-                        p.owner = owner;
-                    }
-                    d.org = (d.org - d.max_org * ORG_LOSS_ON_CONQUER).max(0.0);
-                }
+                arrivals.push(Arrival {
+                    id, dest, owner: d.owner_tag.clone(), was_attacking,
+                });
             }
+        }
+    }
+    // 第二阶段: 处理到达后的占领(此时无 divisions 可变借用冲突)
+    for a in arrivals {
+        if !a.was_attacking {
+            continue;
+        }
+        // 占领条件: 该省无敌军师(守方已败/撤走) + 战斗打完
+        let enemies_remain = world.divisions.values()
+            .any(|od| od.location_province == a.dest && od.owner_tag != a.owner && !od.is_annihilated());
+        if !enemies_remain {
+            if let Some(p) = world.provinces.get_mut(&a.dest) {
+                p.controller = a.owner.clone();
+                p.owner = a.owner;
+            }
+        }
+        // 占领尝试损耗 org(无论是否成功占领)
+        if let Some(d) = world.divisions.get_mut(&a.id) {
+            d.org = (d.org - d.max_org * ORG_LOSS_ON_CONQUER).max(0.0);
         }
     }
 }
