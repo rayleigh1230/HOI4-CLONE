@@ -1,0 +1,21 @@
+# 演示用国策 — 验证引擎端到端
+focus_tree = {
+    id = demo_tree
+    focus = {
+        id = DEMO_industrialize
+        x = 0
+        y = 0
+        cost = 5
+        completion_reward = {
+            add_political_power = 150
+            if = {
+                limit = { political_power >= 150 }
+                add_stability = 0.05
+            }
+            every_owned_state = {
+                limit = { is_core = yes }
+                add_to_variable = { industry_level = 1.0 }
+            }
+        }
+    }
+}
