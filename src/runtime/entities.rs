@@ -50,6 +50,8 @@ pub struct Division {
     // 行军状态: 目标省(None=静止), 进度(0-1, 到1完成移动)
     pub destination: Option<u32>,
     pub move_progress: f64,
+    /// 进攻移动(红箭头): 目标省有敌军, 战斗+移动并行
+    pub attacking: bool,
 }
 
 impl Division {

@@ -520,3 +520,53 @@ fn marching_division_loses_org() {
         "移动中 org 应下降(每小时-0.2): before={org_before} after={org_after}"
     );
 }
+
+#[test]
+fn move_to_enemy_province_starts_battle_immediately() {
+    // 进攻移动: 下令移到敌军所在省 → 立刻开战(非到达才开战)
+    let mut reg = Registry::new();
+    register_all(&mut reg);
+    let interp = Interpreter::new(reg);
+    let mut world = setup_world();
+    run_setup(&mut world, &interp, r#"
+        _setup = {
+            create_division = { owner = GER location = 2 equipment = medium_tank battalions = 7 }
+            create_division = { owner = FRA location = 1 equipment = infantry_equipment battalions = 7 }
+        }
+    "#);
+    let ger_id = world.divisions.values().find(|d| d.owner_tag == "GER").unwrap().id;
+    // GER 在省2, 命令移到省1(FRA 所在) → 应立刻开战
+    assert_eq!(world.battles.len(), 0, "下令前无战斗");
+    let move_effs = hoi4_clone::ast::lower::lower_effects(
+        &hoi4_clone::parser::parse("move_division = { division = 1 target = 1 }").unwrap()
+    );
+    interp.run(&move_effs, &mut world);
+    assert_eq!(world.battles.len(), 1, "下令移到敌省应立刻开战");
+    assert!(world.divisions.get(&ger_id).unwrap().attacking, "应处于进攻移动状态");
+}
+
+#[test]
+fn move_to_empty_province_no_battle() {
+    // 普通移动: 移到空省/己方省 → 不开战, 普通进驻
+    let mut reg = Registry::new();
+    register_all(&mut reg);
+    let interp = Interpreter::new(reg);
+    let mut world = setup_world();
+    run_setup(&mut world, &interp, r#"
+        _setup = {
+            create_division = { owner = GER location = 2 equipment = infantry_equipment battalions = 7 }
+        }
+    "#);
+    let ger_id = world.divisions.values().find(|d| d.owner_tag == "GER").unwrap().id;
+    // 省10 是 GER 己方空省, 移过去不开战
+    let move_effs = hoi4_clone::ast::lower::lower_effects(
+        &hoi4_clone::parser::parse("move_division = { division = 1 target = 10 }").unwrap()
+    );
+    interp.run(&move_effs, &mut world);
+    assert_eq!(world.battles.len(), 0, "移到己方空省不应开战");
+    assert!(!world.divisions.get(&ger_id).unwrap().attacking, "应非进攻状态");
+    // 推进到达
+    use hoi4_clone::runtime::GameClock;
+    GameClock::advance(&interp, &mut world, 10);
+    assert_eq!(world.divisions.get(&ger_id).unwrap().location_province, 10, "应到达省10");
+}

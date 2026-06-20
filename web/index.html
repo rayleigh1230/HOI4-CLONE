@@ -76,7 +76,7 @@ start_battle = { attacker = GER defender = FRA province = 1 }
   <div class="panel">
     <h2>🪖 战场态势</h2>
     <canvas id="mapCanvas"></canvas>
-    <div class="map-hint">💡 点击省份切换控制权(设定包围)</div>
+    <div class="map-hint">💡 点师卡片选中 → 点目标省移动(红箭头=进攻, 绿=移动) | 直接点省切换控制权(包围)</div>
     <div class="battle-info" id="battleInfo"></div>
     <div class="divisions" id="divisions"></div>
   </div>
@@ -175,10 +175,18 @@ function refresh() {
     const card = document.createElement('div');
     let status;
     if (d.annihilated) status = '💀 歼灭';
-    else if (d.dest) status = '🚩 撤退中→' + d.dest;
+    else if (d.attacking) status = '⚔️ 进攻→' + d.dest;
+    else if (d.dest) status = '🚩 撤退→' + d.dest;
     else if (d.retreating) status = '🔄 恢复中';
     else if (d.org <= 0) status = '⚠️ 破阵';
     else status = '🛡️ 驻扎';
+    card.dataset.divId = d.id;
+    if (d.id === selectedDivId) card.style.outline = '2px solid #ffd700';
+    card.onclick = () => {
+      selectedDivId = (selectedDivId === d.id) ? null : d.id;
+      log(selectedDivId ? `选中师#${d.id}, 点目标省下移动令` : '取消选中');
+      refresh();
+    };
     card.className = 'div-card ' + (d.owner === 'GER' ? 'attacker' : 'defender') + (d.annihilated || d.retreating ? ' broken' : '');
     const orgPct = d.max_org > 0 ? (d.org / d.max_org * 100) : 0;
     const strPct = d.max_str > 0 ? (d.str / d.max_str * 100) : 0;
@@ -217,6 +225,7 @@ function refresh() {
 // === 节点图 Canvas ===
 const TAG_COLORS = { GER: '#e94560', FRA: '#16c79a' };
 let canvas, ctx;
+let selectedDivId = null; // 选中师(点师卡片选中, 再点省下移动令)
 
 function provincePos(id, allIds, w, h) {
   // 省份环形排布; 省1居中(战场)
@@ -274,21 +283,30 @@ function drawMap() {
     ctx.fillText(p.controller, c.x, c.y - 18);
   });
 
-  // 部队图标(按 location 定位; 撤退中按 dest+progress 插值)
+  // 部队图标(按 location 定位; 移动中画箭头到目标)
   state.divisions.forEach(d => {
-    let bx, by;
-    if (d.dest && pos[d.loc] && pos[d.dest]) {
-      // 撤退/行军中: 沿连线插值(progress 0-1)
-      const p1 = pos[d.loc], p2 = pos[d.dest];
-      bx = p1.x + (p2.x - p1.x) * 0.5; // 简化:中点(精确进度需 serialize)
-      by = p1.y + (p2.y - p1.y) * 0.5;
-    } else if (pos[d.loc]) {
-      bx = pos[d.loc].x; by = pos[d.loc].y;
-    } else { return; }
+    const bx = pos[d.loc] ? pos[d.loc].x : 0;
+    const by = pos[d.loc] ? pos[d.loc].y : 0;
+    if (!pos[d.loc]) return;
+    // 移动箭头(进攻红/普通绿/撤退青)
+    if (d.dest && pos[d.dest]) {
+      const tx = pos[d.dest].x, ty = pos[d.dest].y;
+      ctx.strokeStyle = d.attacking ? '#e94560' : (d.retreating ? '#16c79a' : '#4cd964');
+      ctx.lineWidth = 2; ctx.setLineDash([]);
+      ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(tx, ty); ctx.stroke();
+      // 箭头头
+      const ang = Math.atan2(ty - by, tx - bx);
+      ctx.beginPath();
+      ctx.moveTo(tx, ty);
+      ctx.lineTo(tx - 8 * Math.cos(ang - 0.4), ty - 8 * Math.sin(ang - 0.4));
+      ctx.lineTo(tx - 8 * Math.cos(ang + 0.4), ty - 8 * Math.sin(ang + 0.4));
+      ctx.closePath(); ctx.fill();
+    }
     const color = TAG_COLORS[d.owner] || '#fff';
     ctx.fillStyle = d.annihilated ? '#444' : color;
     ctx.fillRect(bx - 6, by - 6, 12, 12);
-    ctx.strokeStyle = '#fff'; ctx.lineWidth = 1;
+    ctx.strokeStyle = d.id === selectedDivId ? '#ffd700' : '#fff';
+    ctx.lineWidth = d.id === selectedDivId ? 2 : 1;
     ctx.strokeRect(bx - 6, by - 6, 12, 12);
     ctx.fillStyle = '#fff'; ctx.font = '8px sans-serif';
     ctx.fillText(d.owner, bx, by + 18);
@@ -307,6 +325,14 @@ document.addEventListener('click', (e) => {
   for (const p of state.provinces) {
     const pos = provincePos(p.id, ids, W, H);
     if (Math.hypot(pos.x - x, pos.y - y) < 26) {
+      // 选中了师 → 下移动令; 否则切换控制权
+      if (selectedDivId) {
+        wasm.exports.engine_move_division(selectedDivId, p.id);
+        log(`师#${selectedDivId} → 省${p.id} ${p.controller !== 'GER' && p.controller !== 'FRA' ? '' : ''}`);
+        selectedDivId = null;
+        refresh();
+        return;
+      }
       const newTag = p.controller === 'GER' ? 'FRA' : 'GER';
       const tagBytes = new TextEncoder().encode(newTag);
       const ptr = wasm.exports.engine_alloc(tagBytes.length);

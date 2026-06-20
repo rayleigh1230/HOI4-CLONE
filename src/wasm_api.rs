@@ -83,6 +83,20 @@ pub unsafe extern "C" fn engine_set_province_controller(
     });
 }
 
+/// 命令师移动到目标省(前端点选移动)
+#[no_mangle]
+pub extern "C" fn engine_move_division(division_id: u64, target: u32) {
+    ENGINE.with(|e| {
+        let mut e = e.borrow_mut();
+        let Engine { interp, world } = &mut *e;
+        let script = format!("move_division = {{ division = {division_id} target = {target} }}");
+        if let Ok(b) = crate::parser::parse(&script) {
+            let effs = crate::ast::lower::lower_effects(&b);
+            interp.run(&effs, world);
+        }
+    });
+}
+
 /// 运行 setup 脚本(建师/开战等)。返回 0 成功, 非 0 失败
 #[no_mangle]
 pub unsafe extern "C" fn engine_run_setup(script_ptr: *const u8, script_len: usize) -> u32 {
@@ -152,12 +166,12 @@ fn serialize_state(world: &World) -> String {
         }
         first = false;
         s.push_str(&format!(
-            "{{\"id\":{},\"owner\":\"{}\",\"org\":{:.1},\"max_org\":{:.0},\"str\":{:.1},\"max_str\":{:.0},\"eq_ratio\":{:.2},\"mp_ratio\":{:.2},\"loc\":{},\"dest\":{},\"retreating\":{},\"annihilated\":{}}}",
+            "{{\"id\":{},\"owner\":\"{}\",\"org\":{:.1},\"max_org\":{:.0},\"str\":{:.1},\"max_str\":{:.0},\"eq_ratio\":{:.2},\"mp_ratio\":{:.2},\"loc\":{},\"dest\":{},\"attacking\":{},\"retreating\":{},\"annihilated\":{}}}",
             d.id, d.owner_tag, d.org, d.max_org, d.strength, d.max_strength,
             d.equipment_ratio_only(), d.manpower_ratio(),
             d.location_province,
             d.destination.unwrap_or(0),
-            d.retreating, d.is_annihilated()
+            d.attacking, d.retreating, d.is_annihilated()
         ));
     }
     s.push_str("],\"battles\":");

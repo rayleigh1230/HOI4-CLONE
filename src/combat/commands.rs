@@ -121,6 +121,7 @@ pub fn register(reg: &mut Registry) {
             retreating: false,
             destination: None,
             move_progress: 0.0,
+            attacking: false,
         };
         w.add_division(d);
         Ok(())
@@ -165,6 +166,35 @@ pub fn register(reg: &mut Registry) {
         let id = w.next_battle_id;
         w.next_battle_id += 1;
         w.battles.push(Battle { id, province: prov, attackers: atks, defenders: defs });
+        Ok(())
+    });
+
+    // 主动行军: 师移动到目标省。下令即判定: 目标有敌军→进攻移动(红箭头, 立刻开战); 否则普通移动(绿)
+    reg.register("move_division", |w, p| {
+        let div_id = num_of(np(p, "move_division", "division")?)? as u64;
+        let target = num_of(np(p, "move_division", "target")?)? as u32;
+        // 先取 owner(释放借用), 再查敌军, 最后改师
+        let owner = w.divisions.get(&div_id)
+            .ok_or_else(|| CmdError::RuntimeError(format!("move_division: 师 {div_id} 不存在")))?
+            .owner_tag.clone();
+        // 查目标省有无敌军(非己方的师)
+        let enemies: Vec<u64> = w.divisions.values()
+            .filter(|d| d.location_province == target && d.owner_tag != owner)
+            .map(|d| d.id)
+            .collect();
+        let is_attack = !enemies.is_empty();
+        // 设移动状态
+        if let Some(d) = w.divisions.get_mut(&div_id) {
+            d.destination = Some(target);
+            d.move_progress = 0.0;
+            d.attacking = is_attack;
+        }
+        // 进攻移动: 立刻开战
+        if is_attack {
+            let battle_id = w.next_battle_id;
+            w.next_battle_id += 1;
+            w.battles.push(Battle { id: battle_id, province: target, attackers: vec![div_id], defenders: enemies });
+        }
         Ok(())
     });
 
