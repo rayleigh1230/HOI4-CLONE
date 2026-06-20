@@ -22,19 +22,18 @@ pub fn recover_org(world: &mut World) {
         if in_combat.contains(&div.id) {
             continue; // 战斗中不恢复
         }
-        // 移动中(含撤退行军): 每小时掉 org(HOURLY_ORG_MOVEMENT_IMPACT=-0.2), 不恢复
-        if div.destination.is_some() {
+        // 主动行军(非撤退): 每小时掉 org, 不恢复
+        if div.destination.is_some() && !div.retreating {
             div.org = (div.org + HOURLY_ORG_MOVEMENT_IMPACT).max(0.0);
             continue;
         }
+        // 撤退中 或 静止非战斗: 恢复 org(撤退是脱离战斗休整)
         if div.org >= div.max_org {
-            // 恢复满了, 清除撤退标志(师重回可用状态)
-            div.retreating = false;
+            div.retreating = false; // 恢复满, 清撤退标志
             continue;
         }
-        // 每小时恢复量, 受补给充足度影响(缺装备/人力的师恢复慢)
         let hourly = div.max_org * DAILY_ORG_RECOVERY_RATE / 24.0;
-        let recovery = hourly * (0.5 + 0.5 * div.supply_ratio()); // 补给50-100%影响
+        let recovery = hourly * (0.5 + 0.5 * div.supply_ratio());
         div.org = (div.org + recovery).min(div.max_org);
     }
 }

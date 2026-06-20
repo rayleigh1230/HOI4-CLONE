@@ -100,10 +100,11 @@ pub fn reinforce_all(world: &mut World) {
             mp_transfers.push((did, transfer));
         }
     }
-    // 写回人力
+    // 写回人力 + 同步 HP(HP 随人力补员恢复: strength = max_strength × 人力比)
     for (did, amt) in mp_transfers {
         if let Some(div) = world.divisions.get_mut(&did) {
             div.manpower_held += amt;
+            div.strength = div.max_strength * div.manpower_ratio();
         }
         let tag = world.divisions.get(&did).map(|d| d.owner_tag.clone()).unwrap_or_default();
         if let Some(country) = world.countries.get_mut(&tag) {

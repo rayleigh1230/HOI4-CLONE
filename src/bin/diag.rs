@@ -11,8 +11,11 @@ fn main() {
     let mut world = World::new();
     world.player_tag = "GER".into();
 
-    // 场景: 7个中坦营 vs 7个步兵营。中坦装甲60碾压步兵穿甲1
+    // 场景: demo 配置 — 3省, 中坦 vs 步兵, 看撤退是否到达
     let script = r#"
+        create_province = { id = 1 owner = FRA neighbors = { 2 3 } }
+        create_province = { id = 2 owner = GER neighbors = { 1 } }
+        create_province = { id = 3 owner = FRA neighbors = { 1 } }
         create_division = { owner = GER location = 1 equipment = medium_tank battalions = 7 }
         create_division = { owner = FRA location = 1 equipment = infantry_equipment battalions = 7 }
         start_battle = { attacker = GER defender = FRA province = 1 }
@@ -47,9 +50,9 @@ fn print(world: &World, fra_id: u64) {
         let eq = d.equipment_ratio_only();
         let mp = d.manpower_ratio();
         println!(
-            "{}#{}: HP={:.0}/{:.0} org={:.1}/{:.0} 装备={:.0}% 人力={:.0}% annih={} retreat={}",
+            "{}#{}: HP={:.0}/{:.0} org={:.1}/{:.0} 装备={:.0}% 人力={:.0}% loc={} dest={:?} prog={:.2} retreat={}",
             d.owner_tag, d.id, d.strength, d.max_strength, d.org, d.max_org,
-            eq * 100.0, mp * 100.0, d.is_annihilated(), d.retreating
+            eq * 100.0, mp * 100.0, d.location_province, d.destination, d.move_progress, d.retreating
         );
     }
     let _ = fra_id;
