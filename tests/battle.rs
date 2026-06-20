@@ -164,3 +164,48 @@ fn exact_org_after_one_hour() {
         "1h 后守方 org 应为 49.4, 实际 {fra_org}"
     );
 }
+
+#[test]
+fn equipment_degrades_in_combat_and_reinforces() {
+    // M4a 端到端: 战斗扣装备 → 装备充足度下降 → 增援从仓库补回
+    use hoi4_clone::runtime::GameClock;
+    let mut reg = Registry::new();
+    register_all(&mut reg);
+    let interp = Interpreter::new(reg);
+    let mut world = setup_world();
+    run_setup(&mut world, &interp, r#"
+        _setup = {
+            add_equipment = { owner = GER type = inf amount = 50 }
+            create_division = { owner = GER location = 1 soft_attack = 200 defense = 5 max_org = 60 max_strength = 20 equipment = inf equipment_amount = 100 }
+            create_division = { owner = FRA location = 1 soft_attack = 0 defense = 0 max_org = 60 max_strength = 20 equipment = inf equipment_amount = 100 }
+            start_battle = { attacker = GER defender = FRA province = 1 }
+        }
+    "#);
+    let ger_id = world.divisions.values().find(|d| d.owner_tag == "GER").unwrap().id;
+    let fra_id = world.divisions.values().find(|d| d.owner_tag == "FRA").unwrap().id;
+
+    // 战斗前: FRA 装备满(100/100)
+    let fra_eq_before = world.divisions.get(&fra_id).unwrap().equipment_ratio();
+    assert!((fra_eq_before - 1.0).abs() < 1e-9, "战斗前 FRA 装备应满");
+
+    // 打 12 小时(不到一天, 不触发增援)
+    GameClock::advance(&interp, &mut world, 12);
+    let fra_eq_mid = world.divisions.get(&fra_id).unwrap().equipment_ratio();
+    assert!(
+        fra_eq_mid < fra_eq_before,
+        "战斗应消耗 FRA 装备: before={fra_eq_before} mid={fra_eq_mid}"
+    );
+
+    // 推进到 24h+ 触发每日增援(GER 仓库有 50 件 inf, 但 GER 是攻方不补; FRA 仓库空)
+    // 给 FRA 也加库存以便验证增援
+    world.countries.get_mut("FRA").unwrap().equipment_stockpile.insert("inf".into(), 30.0);
+    let fra_eq_before_reinforce = world.divisions.get(&fra_id).unwrap().equipment_ratio();
+    GameClock::advance(&interp, &mut world, 24); // 触发一次 daily reinforce
+    let fra_eq_after_reinforce = world.divisions.get(&fra_id).unwrap().equipment_ratio();
+    assert!(
+        fra_eq_after_reinforce >= fra_eq_before_reinforce,
+        "增援应补充装备: before={fra_eq_before_reinforce} after={fra_eq_after_reinforce}"
+    );
+
+    let _ = ger_id;
+}

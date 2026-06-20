@@ -13,6 +13,7 @@ fn two_states_world() -> World {
             tag: "GER".into(),
             owned_states: vec![1, 2],
             capital_state: 1,
+            ..Default::default()
         },
     );
     w.provinces.insert(
@@ -53,6 +54,7 @@ fn inf_div(tag: &str, loc: u32) -> Division {
         org: 60.0,
         max_strength: 20.0,
         strength: 20.0,
+        ..Default::default()
     }
 }
 
@@ -112,6 +114,7 @@ fn t_every_country_enumerates_all() {
             tag: "FRA".into(),
             owned_states: vec![10],
             capital_state: 10,
+            ..Default::default()
         },
     );
     let effs = vec![Effect::ForEach {

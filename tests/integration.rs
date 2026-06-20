@@ -106,6 +106,7 @@ fn focus_afghanistan_real_fragment() {
             tag: "AFG".into(),
             owned_states: vec![1],
             capital_state: 1,
+            ..Default::default()
         },
     );
     world.provinces.insert(

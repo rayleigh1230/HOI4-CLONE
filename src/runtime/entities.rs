@@ -12,9 +12,11 @@ pub struct Country {
     pub tag: String,
     pub owned_states: Vec<u32>,
     pub capital_state: u32,
+    /// 装备库存(M4a): equipment_type → 数量
+    pub equipment_stockpile: std::collections::HashMap<String, f64>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Division {
     pub id: u64,
     pub owner_tag: String,
@@ -33,6 +35,9 @@ pub struct Division {
     pub org: f64,
     pub max_strength: f64,
     pub strength: f64,
+    // 装备(M4a): need=满编需求, held=当前持有
+    pub equipment_need: std::collections::HashMap<String, f64>,
+    pub equipment_held: std::collections::HashMap<String, f64>,
 }
 
 impl Division {
@@ -45,6 +50,29 @@ impl Division {
     }
     pub fn is_broken(&self) -> bool {
         self.org <= 0.0
+    }
+    /// 装备充足度(0-1): 当前持有/满编需求。影响有效属性。
+    pub fn equipment_ratio(&self) -> f64 {
+        let need: f64 = self.equipment_need.values().sum();
+        let held: f64 = self.equipment_held.values().sum();
+        if need > 0.0 {
+            (held / need).clamp(0.0, 1.0)
+        } else {
+            1.0
+        }
+    }
+    // M4a: 有效属性 = 面板值 × 装备充足度
+    pub fn effective_soft_attack(&self) -> f64 {
+        self.soft_attack * self.equipment_ratio()
+    }
+    pub fn effective_hard_attack(&self) -> f64 {
+        self.hard_attack * self.equipment_ratio()
+    }
+    pub fn effective_defense(&self) -> f64 {
+        self.defense * self.equipment_ratio()
+    }
+    pub fn effective_breakthrough(&self) -> f64 {
+        self.breakthrough * self.equipment_ratio()
     }
 }
 

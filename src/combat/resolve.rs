@@ -14,6 +14,7 @@ const HIT_CHANCE_NO_DEF: f64 = 0.40; // 防御池耗尽
 const ARMOR_ORG_BONUS_DICE: f64 = 6.0; // 装甲碾压额外组织度骰
 const ARMOR_STR_BONUS_DICE: f64 = 2.0;
 const DAMAGE_SPLIT_FIRST: f64 = 0.35; // 首要目标分摊
+const EQUIPMENT_LOSS_FACTOR: f64 = 0.70; // HP损→装备损(原版 defines)
 
 /// 攻方只读快照(避免与守方可变借用冲突)
 #[derive(Clone, Copy)]
@@ -26,9 +27,10 @@ struct AtkStats {
 
 impl AtkStats {
     fn from(d: &Division) -> Self {
+        // M4a: 攻击属性按装备充足度缩放(缺装备→攻击下降)
         Self {
-            soft_attack: d.soft_attack,
-            hard_attack: d.hard_attack,
+            soft_attack: d.effective_soft_attack(),
+            hard_attack: d.effective_hard_attack(),
             armor: d.armor,
             piercing: d.piercing,
         }
@@ -61,9 +63,10 @@ enum CombatPool {
 
 impl CombatPool {
     fn pool_value(self, d: &Division) -> f64 {
+        // M4a: 防御池也按装备充足度缩放
         match self {
-            CombatPool::Defense => d.defense,
-            CombatPool::Breakthrough => d.breakthrough,
+            CombatPool::Defense => d.effective_defense(),
+            CombatPool::Breakthrough => d.effective_breakthrough(),
         }
     }
 }
@@ -106,7 +109,14 @@ fn apply_side_to_side(atk: &AtkStats, targets: &mut [&mut Division], pool: Comba
         let str_dmg = hits * ((str_dice + 1.0) / 2.0) * STR_DMG_MOD * armor_deflect;
 
         tgt.org = (tgt.org - org_dmg).max(0.0);
+        let hp_before = tgt.strength;
         tgt.strength = (tgt.strength - str_dmg).max(0.0);
+        // M4a: HP 损失 → 装备损失(按 EQUIPMENT_COMBAT_LOSS_FACTOR=0.70)
+        let hp_loss = hp_before - tgt.strength;
+        if hp_loss > 0.0 {
+            let eq_loss = hp_loss * EQUIPMENT_LOSS_FACTOR;
+            consume_equipment(tgt, eq_loss);
+        }
     }
 }
 
@@ -115,6 +125,22 @@ fn compute_hits(attacks: f64, def_pool: f64) -> f64 {
     let defended = attacks.min(def_pool);
     let undefended = (attacks - def_pool).max(0.0);
     defended * HIT_CHANCE_DEF_LEFT + undefended * HIT_CHANCE_NO_DEF
+}
+
+/// M4a: 按 HP 损失量扣装备(各装备类型按持有比例分摊)
+fn consume_equipment(div: &mut Division, total_loss: f64) {
+    let total_held: f64 = div.equipment_held.values().sum();
+    if total_held <= 0.0 {
+        return;
+    }
+    // 收集类型避免迭代时修改
+    let types: Vec<String> = div.equipment_held.keys().cloned().collect();
+    for eq_type in types {
+        let held = *div.equipment_held.get(&eq_type).unwrap_or(&0.0);
+        let share = held / total_held;
+        let loss = (total_loss * share).min(held);
+        *div.equipment_held.get_mut(&eq_type).unwrap() = held - loss;
+    }
 }
 
 /// World 级战斗结算: 遍历所有 battle, 每小时调用
@@ -128,8 +154,9 @@ pub fn resolve_all_battles(world: &mut World) {
         .collect();
 
     // 用 HashMap 聚合每个师的最终值(同一师可能在多场战斗, 需合并而非覆盖 → 修 P1-6)
+    // 存完整快照: org/strength/equipment_held(M4a 装备消耗需写回)
     use std::collections::HashMap;
-    let mut final_state: HashMap<u64, (f64, f64)> = HashMap::new();
+    let mut final_state: HashMap<u64, Division> = HashMap::new();
 
     for (atk_ids, def_ids) in &battle_specs {
         let mut atks: Vec<Division> =
@@ -155,24 +182,25 @@ pub fn resolve_all_battles(world: &mut World) {
             }
         }
 
-        // 合并本场战斗结果到 final_state
+        // 合并本场战斗结果到 final_state(存完整 Division 快照)
         for (i, id) in atk_ids.iter().enumerate() {
             if let Some(d) = atks.get(i) {
-                final_state.insert(*id, (d.org, d.strength));
+                final_state.insert(*id, d.clone());
             }
         }
         for (i, id) in def_ids.iter().enumerate() {
             if let Some(d) = defs.get(i) {
-                final_state.insert(*id, (d.org, d.strength));
+                final_state.insert(*id, d.clone());
             }
         }
     }
 
-    // 写回
-    for (id, (org, str)) in final_state {
+    // 写回: org/strength/equipment_held(M4a 装备消耗)
+    for (id, snap) in final_state {
         if let Some(d) = world.divisions.get_mut(&id) {
-            d.org = org;
-            d.strength = str;
+            d.org = snap.org;
+            d.strength = snap.strength;
+            d.equipment_held = snap.equipment_held;
         }
     }
 }
@@ -198,6 +226,7 @@ mod tests {
             org: 60.0,
             max_strength: 20.0,
             strength: 20.0,
+            ..Default::default()
         }
     }
 

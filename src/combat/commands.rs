@@ -23,6 +23,15 @@ pub fn register(reg: &mut Registry) {
         let loc = num_of(np(p, "create_division", "location")?)? as u32;
         let opt_num = |k: &str| ParamGet::get(p, k).and_then(Arg::as_num);
         let max_org = opt_num("max_org").unwrap_or(60.0);
+        let max_str = opt_num("max_strength").unwrap_or(20.0);
+        // M4a: 装备需求/持有。equipment=类型, equipment_amount=数量(默认100)
+        let mut eq_need = std::collections::HashMap::new();
+        let mut eq_held = std::collections::HashMap::new();
+        if let Some(eq_type) = ParamGet::get(p, "equipment").and_then(Arg::as_str) {
+            let amt = opt_num("equipment_amount").unwrap_or(100.0);
+            eq_need.insert(eq_type.to_string(), amt);
+            eq_held.insert(eq_type.to_string(), amt); // 建师时满编
+        }
         let d = Division {
             id: 0,
             owner_tag: owner.into(),
@@ -37,10 +46,24 @@ pub fn register(reg: &mut Registry) {
             combat_width: opt_num("combat_width").unwrap_or(10.0),
             max_org,
             org: max_org,
-            max_strength: opt_num("max_strength").unwrap_or(20.0),
-            strength: opt_num("max_strength").unwrap_or(20.0),
+            max_strength: max_str,
+            strength: max_str,
+            equipment_need: eq_need,
+            equipment_held: eq_held,
         };
         w.add_division(d);
+        Ok(())
+    });
+
+    // 往国家仓库加装备(M4a 手动补充; M4b 由生产系统自动产)
+    reg.register("add_equipment", |w, p| {
+        let owner = np(p, "add_equipment", "owner")?.as_str()
+            .ok_or_else(|| CmdError::RuntimeError("owner 应为字符串".into()))?;
+        let eq = np(p, "add_equipment", "type")?.as_str()
+            .ok_or_else(|| CmdError::RuntimeError("type 应为字符串".into()))?;
+        let amt = num_of(np(p, "add_equipment", "amount")?)?;
+        let country = w.countries.entry(owner.into()).or_default();
+        *country.equipment_stockpile.entry(eq.into()).or_insert(0.0) += amt;
         Ok(())
     });
 

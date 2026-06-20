@@ -31,6 +31,7 @@
   .bar-fill { height: 100%; transition: width 0.3s; }
   .bar-fill.org { background: linear-gradient(90deg, #16c79a, #4cd964); }
   .bar-fill.str { background: linear-gradient(90deg, #e94560, #ff6b6b); }
+  .bar-fill.eq { background: linear-gradient(90deg, #f0a500, #ffd700); }
   .bar-val { width: 50px; text-align: right; color: #ccc; font-family: monospace; }
   .battle-info { font-size: 12px; color: #aaa; margin-top: 8px; }
   #log { height: 100px; overflow-y: auto; background: #0a0a1a; border: 1px solid #0f3460; border-radius: 4px; padding: 6px; font-family: monospace; font-size: 11px; color: #7ec8e3; margin-top: 10px; }
@@ -44,8 +45,10 @@
 <div class="layout" id="app" style="display:none">
   <div class="panel">
     <h2>📋 场景设置 (HOI4 风格脚本)</h2>
-    <textarea id="script">create_division = { owner = GER location = 1 soft_attack = 100 hard_attack = 5 defense = 40 breakthrough = 10 armor = 0 piercing = 10 max_org = 60 max_strength = 20 }
-create_division = { owner = FRA location = 1 soft_attack = 80 hard_attack = 4 defense = 40 breakthrough = 8 armor = 0 piercing = 10 max_org = 60 max_strength = 20 }
+    <textarea id="script">add_equipment = { owner = GER type = infantry_equipment amount = 30 }
+add_equipment = { owner = FRA type = infantry_equipment amount = 30 }
+create_division = { owner = GER location = 1 soft_attack = 100 hard_attack = 5 defense = 40 breakthrough = 10 armor = 0 piercing = 10 max_org = 60 max_strength = 20 equipment = infantry_equipment equipment_amount = 100 }
+create_division = { owner = FRA location = 1 soft_attack = 80 hard_attack = 4 defense = 40 breakthrough = 8 armor = 0 piercing = 10 max_org = 60 max_strength = 20 equipment = infantry_equipment equipment_amount = 100 }
 start_battle = { attacker = GER defender = FRA province = 1 }</textarea>
     <div class="controls">
       <button onclick="loadScript()">应用场景</button>
@@ -159,6 +162,7 @@ function refresh() {
     card.className = 'div-card ' + (d.owner === 'GER' ? 'attacker' : 'defender') + (d.broken ? ' broken' : '');
     const orgPct = d.max_org > 0 ? (d.org / d.max_org * 100) : 0;
     const strPct = d.max_str > 0 ? (d.str / d.max_str * 100) : 0;
+    const eqPct = (d.eq_ratio || 1) * 100;
     card.innerHTML = `
       <div class="div-head">
         <span class="div-owner">${d.owner} 师 #${d.id} ${d.broken ? '💀 破阵' : ''}</span>
@@ -172,6 +176,11 @@ function refresh() {
         <span class="bar-label">HP</span>
         <div class="bar-track"><div class="bar-fill str" style="width:${strPct}%"></div></div>
         <span class="bar-val">${d.str.toFixed(1)}/${d.max_str.toFixed(0)}</span>
+      </div>
+      <div class="bar-row">
+        <span class="bar-label">装备</span>
+        <div class="bar-track"><div class="bar-fill eq" style="width:${eqPct}%"></div></div>
+        <span class="bar-val">${(d.eq_ratio*100).toFixed(0)}%</span>
       </div>`;
     container.appendChild(card);
   }

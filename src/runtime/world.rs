@@ -160,6 +160,7 @@ mod tests {
             soft_attack: 10.0, hard_attack: 1.0, defense: 20.0, breakthrough: 5.0,
             armor: 0.0, piercing: 5.0, hardness: 0.0, combat_width: 10.0,
             max_org: 60.0, org: 60.0, max_strength: 20.0, strength: 20.0,
+            ..Default::default()
         };
         let id = w.add_division(d);
         assert_eq!(id, 1);

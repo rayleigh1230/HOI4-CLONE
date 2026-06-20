@@ -168,7 +168,11 @@ fn parse_arg(s: &str) -> Arg {
         return Arg::Bool(false);
     }
     if let Ok(n) = s.parse::<f64>() {
-        return Arg::Num(n);
+        // 排除 inf/nan: Rust 把 "inf"/"nan" 解析为无穷/NaN,
+        // 但 HOI4 里这些是 ident(如装备缩写 inf)。只接受有限数字。
+        if n.is_finite() {
+            return Arg::Num(n);
+        }
     }
     Arg::Str(s.trim_matches('"').to_string())
 }
