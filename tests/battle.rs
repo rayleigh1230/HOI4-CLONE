@@ -109,3 +109,58 @@ fn stalemate_no_damage_when_no_battle() {
         "无战斗时 org 不应变化"
     );
 }
+
+#[test]
+fn counter_attack_damages_attacker() {
+    // P0-2 验证: 战斗对称, 攻方也掉 org(反击)
+    let mut reg = Registry::new();
+    register_all(&mut reg);
+    let interp = Interpreter::new(reg);
+    let mut world = setup_world();
+    run_setup(&mut world, &interp, r#"
+        _setup = {
+            create_division = { owner = GER location = 1 soft_attack = 100 defense = 40 max_org = 60 }
+            create_division = { owner = FRA location = 1 soft_attack = 100 defense = 40 max_org = 60 }
+            start_battle = { attacker = GER defender = FRA province = 1 }
+        }
+    "#);
+    let ger_id = world.divisions.values().find(|d| d.owner_tag == "GER").unwrap().id;
+    let ger_org_before = world.divisions.get(&ger_id).unwrap().org;
+
+    GameClock::advance(&interp, &mut world, 24);
+    let ger_org_after = world.divisions.get(&ger_id).unwrap().org;
+    assert!(
+        ger_org_after < ger_org_before,
+        "P0-2: 攻方应受反击掉 org, before={ger_org_before} after={ger_org_after}"
+    );
+}
+
+#[test]
+fn exact_org_after_one_hour() {
+    // P1-7 验证: 1 小时后守方 org = 精确预期值(锁定公式)
+    // 配置: 攻方 soft_attack=200 hard=0, 守方 hardness=0 defense=0 max_org=60
+    //   攻击点 = 200×(1-0) + 0 = 200, 单目标 share=100% → 200 攻击
+    //   防御池 0 → 全 undefended: 命中 = 200×0.40 = 80
+    //   无装甲碾压: org骰=4, 期望=(4+1)/2=2.5
+    //   org伤害 = 80 × 2.5 × 0.053 = 10.6
+    //   守方 org = 60 - 10.6 = 49.4
+    let mut reg = Registry::new();
+    register_all(&mut reg);
+    let interp = Interpreter::new(reg);
+    let mut world = setup_world();
+    run_setup(&mut world, &interp, r#"
+        _setup = {
+            create_division = { owner = GER location = 1 soft_attack = 200 hard_attack = 0 armor = 0 piercing = 0 max_org = 60 }
+            create_division = { owner = FRA location = 1 soft_attack = 0 defense = 0 hardness = 0 armor = 0 piercing = 0 max_org = 60 }
+            start_battle = { attacker = GER defender = FRA province = 1 }
+        }
+    "#);
+    let fra_id = world.divisions.values().find(|d| d.owner_tag == "FRA").unwrap().id;
+    GameClock::advance(&interp, &mut world, 1);
+    let fra_org = world.divisions.get(&fra_id).unwrap().org;
+    // 容忍小数误差(反击守方 soft_attack=0 不造成伤害, 故纯正向)
+    assert!(
+        (fra_org - 49.4).abs() < 0.01,
+        "1h 后守方 org 应为 49.4, 实际 {fra_org}"
+    );
+}

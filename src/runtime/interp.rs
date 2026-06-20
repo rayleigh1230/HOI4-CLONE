@@ -108,8 +108,15 @@ impl Interpreter {
 
         for target in targets {
             world.scope_stack.push(target);
+            // P1-4 修复: filter 求值失败也必须 pop, 保证栈平衡
             let pass = match filter {
-                Some(t) => self.eval(t, world)?,
+                Some(t) => match self.eval(t, world) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        world.scope_stack.pop();
+                        return Err(e);
+                    }
+                },
                 None => true,
             };
             if pass {

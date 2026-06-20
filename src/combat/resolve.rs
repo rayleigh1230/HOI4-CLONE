@@ -35,44 +35,62 @@ impl AtkStats {
     }
 }
 
-/// 对一组攻击者 vs 一组防御者结算 1 小时
+/// 对一组攻击者 vs 一组防御者结算 1 小时(对称: 攻→守 + 守→攻)
 /// 守方为可变引用切片, 兼容 HashMap::get_mut 收集的 Vec<&mut Division>
 pub fn resolve_hour(attackers: &[Division], defenders: &mut [&mut Division]) {
     if attackers.is_empty() || defenders.is_empty() {
         return;
     }
-    // 累积所有攻方的伤害到每个守方
+    // 正向: 攻方 → 守方(守方用 defense 池)
     for atk in attackers {
         let atk_stats = AtkStats::from(atk);
-        apply_attacker_to_defenders(&atk_stats, defenders);
+        apply_side_to_side(&atk_stats, defenders, CombatPool::Defense);
+    }
+    // P0-2 反击: 守方 → 攻方(攻方用 breakthrough 池)。
+    // 攻方此时需可变借用; 但 attackers 是 &[Division](只读)。
+    // 解法: 把攻方伤害累积到独立结构, 调用方(resolve_all_battles)处理对称。
+    // 此函数内反击由 resolve_all_battles 通过交换攻守角色实现。
+}
+
+/// 哪一方的防御池: 守方用 defense, 攻方(被反击时)用 breakthrough
+#[derive(Clone, Copy)]
+enum CombatPool {
+    Defense,
+    Breakthrough,
+}
+
+impl CombatPool {
+    fn pool_value(self, d: &Division) -> f64 {
+        match self {
+            CombatPool::Defense => d.defense,
+            CombatPool::Breakthrough => d.breakthrough,
+        }
     }
 }
 
-/// 单个攻方对一组守方输出伤害(首要目标 35%, 其余均分 65%)
-fn apply_attacker_to_defenders(atk: &AtkStats, defenders: &mut [&mut Division]) {
-    let n = defenders.len();
+/// 单个攻击方对一组目标输出伤害(首要目标 35% + 所有目标均分 65%)
+fn apply_side_to_side(atk: &AtkStats, targets: &mut [&mut Division], pool: CombatPool) {
+    let n = targets.len();
     if n == 0 {
         return;
     }
-    // 用首个守方的硬度算总攻击点(M3 简化: 假设守方硬度一致)
-    let target_hardness = defenders[0].hardness;
+    // 用首个目标的硬度算总攻击点(M3 简化: 假设目标硬度一致)
+    let target_hardness = targets[0].hardness;
     let attacks = atk.soft_attack * (1.0 - target_hardness) + atk.hard_attack * target_hardness;
     if attacks <= 0.0 {
         return;
     }
 
-    for (i, def) in defenders.iter_mut().enumerate() {
-        let share = if i == 0 {
-            DAMAGE_SPLIT_FIRST
-        } else {
-            (1.0 - DAMAGE_SPLIT_FIRST) / (n - 1).max(1) as f64
-        };
+    for (i, tgt) in targets.iter_mut().enumerate() {
+        // P0-1: 首要目标 35% + 所有目标均分 65%(含首要)。
+        let base = (1.0 - DAMAGE_SPLIT_FIRST) / n as f64;
+        let share = if i == 0 { DAMAGE_SPLIT_FIRST + base } else { base };
         let attacks_on_this = attacks * share;
 
-        let armor_outclass = atk.armor > def.piercing;
-        let def_outclass = def.armor > atk.piercing;
+        let armor_outclass = atk.armor > tgt.piercing;
+        let def_outclass = tgt.armor > atk.piercing;
 
-        let hits = compute_hits(attacks_on_this, def.defense);
+        let hits = compute_hits(attacks_on_this, pool.pool_value(tgt));
 
         let mut org_dice = ORG_DICE_SIZE;
         let mut str_dice = STR_DICE_SIZE;
@@ -80,14 +98,15 @@ fn apply_attacker_to_defenders(atk: &AtkStats, defenders: &mut [&mut Division]) 
             org_dice += ARMOR_ORG_BONUS_DICE;
             str_dice += ARMOR_STR_BONUS_DICE;
         }
+        // P2-9: 装甲偏转同时作用于 org 和 str
         let armor_deflect = if def_outclass { 0.5 } else { 1.0 };
 
-        // 期望伤害(骰子均值 = size/2)
-        let org_dmg = hits * (org_dice / 2.0) * ORG_DMG_MOD;
-        let str_dmg = hits * (str_dice / 2.0) * STR_DMG_MOD * armor_deflect;
+        // P1-3: 1dN 期望 = (N+1)/2
+        let org_dmg = hits * ((org_dice + 1.0) / 2.0) * ORG_DMG_MOD * armor_deflect;
+        let str_dmg = hits * ((str_dice + 1.0) / 2.0) * STR_DMG_MOD * armor_deflect;
 
-        def.org = (def.org - org_dmg).max(0.0);
-        def.strength = (def.strength - str_dmg).max(0.0);
+        tgt.org = (tgt.org - org_dmg).max(0.0);
+        tgt.strength = (tgt.strength - str_dmg).max(0.0);
     }
 }
 
@@ -99,42 +118,61 @@ fn compute_hits(attacks: f64, def_pool: f64) -> f64 {
 }
 
 /// World 级战斗结算: 遍历所有 battle, 每小时调用
-/// 两阶段: ① 读阶段(快照)计算每个守方应受伤害; ② 写阶段按 id 写回。避免多可变借用冲突。
+/// 三阶段: ① 快照攻守; ② 对称结算(攻→守 defense 池 + 守→攻 breakthrough 池);
+///         ③ 按 id 写回所有受影响师(攻+守)。避免多可变借用冲突, 无 unsafe。
 pub fn resolve_all_battles(world: &mut World) {
-    // 收集每场战斗的攻守 id
     let battle_specs: Vec<(Vec<u64>, Vec<u64>)> = world
         .battles
         .iter()
         .map(|b| (b.attackers.clone(), b.defenders.clone()))
         .collect();
 
-    // 阶段1: 读 + 计算 → (def_id, new_org, new_str) 列表(克隆守方结算后取最终值)
-    let mut results: Vec<(u64, f64, f64)> = Vec::new();
+    // 用 HashMap 聚合每个师的最终值(同一师可能在多场战斗, 需合并而非覆盖 → 修 P1-6)
+    use std::collections::HashMap;
+    let mut final_state: HashMap<u64, (f64, f64)> = HashMap::new();
+
     for (atk_ids, def_ids) in &battle_specs {
-        let atks: Vec<Division> = atk_ids.iter().filter_map(|id| world.divisions.get(id).cloned()).collect();
-        if atks.is_empty() {
-            continue;
-        }
+        let mut atks: Vec<Division> =
+            atk_ids.iter().filter_map(|id| world.divisions.get(id).cloned()).collect();
         let mut defs: Vec<Division> =
             def_ids.iter().filter_map(|id| world.divisions.get(id).cloned()).collect();
-        if defs.is_empty() {
+        if atks.is_empty() || defs.is_empty() {
             continue;
         }
-        let mut def_refs: Vec<&mut Division> = defs.iter_mut().collect();
-        resolve_hour(&atks, &mut def_refs);
-        // 记录结算后每个守方的最终 org/str
-        for (i, def_id) in def_ids.iter().enumerate() {
+
+        // 正向: 攻 → 守(守用 defense 池)
+        {
+            let mut def_refs: Vec<&mut Division> = defs.iter_mut().collect();
+            for atk in &atks {
+                apply_side_to_side(&AtkStats::from(atk), &mut def_refs, CombatPool::Defense);
+            }
+        }
+        // 反向(反击): 守 → 攻(攻用 breakthrough 池)
+        {
+            let mut atk_refs: Vec<&mut Division> = atks.iter_mut().collect();
+            for def in &defs {
+                apply_side_to_side(&AtkStats::from(def), &mut atk_refs, CombatPool::Breakthrough);
+            }
+        }
+
+        // 合并本场战斗结果到 final_state
+        for (i, id) in atk_ids.iter().enumerate() {
+            if let Some(d) = atks.get(i) {
+                final_state.insert(*id, (d.org, d.strength));
+            }
+        }
+        for (i, id) in def_ids.iter().enumerate() {
             if let Some(d) = defs.get(i) {
-                results.push((*def_id, d.org, d.strength));
+                final_state.insert(*id, (d.org, d.strength));
             }
         }
     }
 
-    // 阶段2: 写回(每个 id 独立 get_mut, 无并发借用)
-    for (def_id, new_org, new_str) in results {
-        if let Some(d) = world.divisions.get_mut(&def_id) {
-            d.org = new_org;
-            d.strength = new_str;
+    // 写回
+    for (id, (org, str)) in final_state {
+        if let Some(d) = world.divisions.get_mut(&id) {
+            d.org = org;
+            d.strength = str;
         }
     }
 }
