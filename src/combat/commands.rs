@@ -218,19 +218,27 @@ pub fn register(reg: &mut Registry) {
         }
         // 有敌军防守 → 开战: 若目标省已有战斗则加入, 否则新建
         if !enemies.is_empty() {
-            // 先查是否有现有战斗(只读, 得索引避免借用冲突)
-            let existing_idx = w.battles.iter().position(|b| b.province == target);
+            let from_prov = w.divisions.get(&div_id).map(|d| d.location_province).unwrap_or(0);
             let div_width = w.divisions.get(&div_id).map(|d| d.combat_width).unwrap_or(0.0);
+            let existing_idx = w.battles.iter().position(|b| b.province == target);
             if let Some(bidx) = existing_idx {
-                // 加入已有战斗: 按宽度分攻方前线/预备队
-                let can_front = crate::combat::width::can_join_frontline(w, &w.battles[bidx].attackers, div_width);
-                if can_front {
-                    w.battles[bidx].attackers.push(div_id);
-                } else {
+                // 加入已有战斗: 判定进前线还是预备队
+                // 规则: 同出发地(from_prov)已有师在攻该目标 → 后到的进预备队(时间线落后)
+                //       不同出发地 → 直接前线(新方向)
+                //       再检查宽度: 超宽也进预备队
+                let same_origin_exists = w.battles[bidx].attackers.iter()
+                    .chain(w.battles[bidx].reserve_attackers.iter())
+                    .any(|aid| w.divisions.get(aid)
+                        .map(|d| d.location_province == from_prov)
+                        .unwrap_or(false));
+                let over_width = !crate::combat::width::can_join_frontline(w, &w.battles[bidx].attackers, div_width);
+                if same_origin_exists || over_width {
                     w.battles[bidx].reserve_attackers.push(div_id);
+                } else {
+                    w.battles[bidx].attackers.push(div_id);
                 }
             } else {
-                // 新建战斗: 守方宽度分配
+                // 新建战斗: 守方按宽度分配(守方无出发地概念, 用宽度)
                 let mut frontline_d = Vec::new();
                 let mut reserve_d = Vec::new();
                 for eid in &enemies {

@@ -11,11 +11,17 @@ const HOURLY_ORG_MOVEMENT_IMPACT: f64 = -0.2;
 
 /// 对所有非战斗师执行组织度恢复(每小时调用)
 pub fn recover_org(world: &mut World) {
-    // 收集所有在战斗中的师 id
+    // 收集所有在交战地块的师 id(前线 + 预备队, 都不恢复org)
     let in_combat: std::collections::HashSet<u64> = world
         .battles
         .iter()
-        .flat_map(|b| b.attackers.iter().chain(b.defenders.iter()).copied())
+        .flat_map(|b| {
+            b.attackers.iter()
+                .chain(b.defenders.iter())
+                .chain(b.reserve_attackers.iter())
+                .chain(b.reserve_defenders.iter())
+                .copied()
+        })
         .collect();
 
     for div in world.divisions.values_mut() {
