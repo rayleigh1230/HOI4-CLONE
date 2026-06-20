@@ -108,4 +108,30 @@ mod tests {
         assert!(world.battles[0].attackers.contains(&id2), "预备队应补入前线");
         assert!(!world.battles[0].reserve_attackers.contains(&id2), "应移出预备队");
     }
+
+    #[test]
+    fn t_reserve_division_recovers_org() {
+        // Bug1 验证: 预备队师(非前线)应恢复 org
+        let mut world = World::new();
+        let mut d1 = wide_div("GER", 60.0);
+        d1.org = 30.0; // 前线师 org 不满(战斗中不恢复)
+        let mut d2 = wide_div("GER", 10.0);
+        d2.org = 30.0; // 预备队师 org 不满(应恢复)
+        let id1 = world.add_division(d1);
+        let id2 = world.add_division(d2);
+        world.battles.push(Battle {
+            id: 1, province: 1,
+            attackers: vec![id1], defenders: vec![],
+            reserve_attackers: vec![id2], reserve_defenders: vec![],
+        });
+        crate::combat::recovery::recover_org(&mut world);
+        // 前线师 org 不变(战斗中)
+        assert!((world.divisions.get(&id1).unwrap().org - 30.0).abs() < 1e-9, "前线师不应恢复");
+        // 预备队师 org 应恢复
+        assert!(
+            world.divisions.get(&id2).unwrap().org > 30.0,
+            "预备队师应恢复 org: {}",
+            world.divisions.get(&id2).unwrap().org
+        );
+    }
 }

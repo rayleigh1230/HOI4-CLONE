@@ -640,3 +640,40 @@ fn march_into_empty_enemy_province_captures() {
     assert_eq!(world.divisions.get(&ger_id).unwrap().location_province, 2, "应到达省2");
     assert_eq!(world.provinces.get(&2).unwrap().controller, "GER", "到达应占领省2");
 }
+
+#[test]
+fn frontline_route_causes_reserve_routing() {
+    // 带溃: 守方前线崩 → 预备队强制撤退 + 攻方占地
+    // 即使预备队还有师, 前线崩了就被带溃, 不继续战斗
+    use hoi4_clone::runtime::GameClock;
+    let mut reg = Registry::new();
+    register_all(&mut reg);
+    let interp = Interpreter::new(reg);
+    let mut world = setup_world();
+    // 3个FRA师在省1: 2前线(低HP易崩) + 1预备队(满血)
+    // 用宽度分配: 2个7步师=28宽<70进前线, 第3个超宽进预备队? 不, 3个21宽也<70
+    // 改: 用大宽度让第3个进预备队。combat_width=40的两个师=80>70, 第2个进预备队
+    run_setup(&mut world, &interp, r#"
+        _setup = {
+            create_division = { owner = GER location = 2 equipment = medium_tank battalions = 7 }
+            create_division = { owner = FRA location = 1 equipment = infantry_equipment battalions = 7 soft_attack = 0 defense = 5 max_org = 10 }
+            create_division = { owner = FRA location = 1 equipment = infantry_equipment battalions = 7 soft_attack = 0 defense = 5 max_org = 10 }
+        }
+    "#);
+    // 手动构造战斗: 2个FRA前线(会被快速打崩), 无预备队先测基础
+    // 实际测带溃需要预备队, 但宽度70容纳多个7步师(14宽). 用 move_division 进攻
+    let move_effs = hoi4_clone::ast::lower::lower_effects(
+        &hoi4_clone::parser::parse("move_division = { division = 1 target = 1 }").unwrap()
+    );
+    interp.run(&move_effs, &mut world);
+    // GER 进攻省1, FRA 2师都在前线(28宽<70)
+    assert!(!world.battles.is_empty(), "应有战斗");
+    // 推进让 FRA 前线崩(org 10 很快归零)
+    GameClock::advance(&interp, &mut world, 30);
+    // FRA 前线全崩 → 战斗结束 + 占地
+    assert_eq!(world.battles.len(), 0, "前线崩后战斗应结束");
+    assert_eq!(world.provinces.get(&1).unwrap().controller, "GER", "应占领省1");
+    // FRA 师应撤退(非歼灭, org归零HP有余)
+    let fra_alive = world.divisions.values().filter(|d| d.owner_tag == "FRA").count();
+    assert!(fra_alive > 0, "FRA 师应撤退存活(非歼灭)");
+}

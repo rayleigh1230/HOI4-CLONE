@@ -230,11 +230,14 @@ pub fn resolve_all_battles(world: &mut World) {
 ///
 /// 一方全退(歼灭或撤退) → 战斗结束
 fn cleanup_battles(world: &mut World) {
-    let battle_specs: Vec<(usize, u32, Vec<u64>, Vec<u64>)> = world
+    /// 战斗快照: (idx, province, atk前线, def前线, atk预备, def预备)
+    type BattleSpec = (usize, u32, Vec<u64>, Vec<u64>, Vec<u64>, Vec<u64>);
+    let battle_specs: Vec<BattleSpec> = world
         .battles
         .iter()
         .enumerate()
-        .map(|(i, b)| (i, b.province, b.attackers.clone(), b.defenders.clone()))
+        .map(|(i, b)| (i, b.province, b.attackers.clone(), b.defenders.clone(),
+                       b.reserve_attackers.clone(), b.reserve_defenders.clone()))
         .collect();
 
     let mut battles_to_remove: Vec<usize> = Vec::new();
@@ -243,8 +246,9 @@ fn cleanup_battles(world: &mut World) {
     let mut province_captures: Vec<(u32, String)> = Vec::new();
     let mut to_annihilate: Vec<u64> = Vec::new();
     let mut to_mark_retreat: Vec<u64> = Vec::new();
+    let mut routing_reserves: Vec<u64> = Vec::new(); // 带溃: 前线崩了, 预备队强制撤退
 
-    for (idx, province, atk_ids, def_ids) in &battle_specs {
+    for (idx, province, atk_ids, def_ids, res_atk, res_def) in &battle_specs {
         // 分类每方: 退出(歼灭/撤退)的移出, 存活的保留
         let classify = |ids: &[u64]| -> (Vec<u64>, Vec<u64>, Vec<u64>) {
             let mut alive = Vec::new();
@@ -267,12 +271,32 @@ fn cleanup_battles(world: &mut World) {
         to_mark_retreat.extend(atk_ret);
         to_mark_retreat.extend(def_ret);
 
-        if atk_alive.is_empty() || def_alive.is_empty() {
+        // 带溃机制: 前线守方全退/消灭 → 预备队强制撤退(被溃兵冲散) + 攻方占地
+        // (前线崩了, 预备队还没展开就被带溃, 只能跟着撤)
+        let def_frontline_routed = def_alive.is_empty();
+        let atk_frontline_routed = atk_alive.is_empty();
+        if def_frontline_routed || atk_frontline_routed {
             battles_to_remove.push(*idx);
-            // 占地: 守方全退/歼灭 → 攻方占领省份(攻方存活时)
-            if def_alive.is_empty() && !atk_alive.is_empty() {
-                if let Some(winner) = world.divisions.get(&atk_alive[0]) {
-                    province_captures.push((*province, winner.owner_tag.clone()));
+            // 守方前线崩 → 守方预备队带溃撤退 + 攻方占地(攻方有存活时)
+            if def_frontline_routed {
+                // 预备队强制撤退
+                for rid in res_def {
+                    routing_reserves.push(*rid);
+                }
+                // 占地
+                if !atk_alive.is_empty() || !res_atk.is_empty() {
+                    let winner_src = atk_alive.first().or(res_atk.first());
+                    if let Some(wid) = winner_src {
+                        if let Some(winner) = world.divisions.get(wid) {
+                            province_captures.push((*province, winner.owner_tag.clone()));
+                        }
+                    }
+                }
+            }
+            // 攻方前线崩 → 攻方预备队带溃撤退(守方守住, 不占地)
+            if atk_frontline_routed {
+                for rid in res_atk {
+                    routing_reserves.push(*rid);
                 }
             }
         } else if atk_alive.len() < atk_ids.len() || def_alive.len() < def_ids.len() {
@@ -280,6 +304,8 @@ fn cleanup_battles(world: &mut World) {
         }
     }
 
+    // 带溃预备队加入撤退处理
+    to_mark_retreat.extend(routing_reserves);
     // 撤退处理: 分配撤退目标(邻接己方省); 无邻省→被包围→歼灭
     let mut surrounded: Vec<u64> = Vec::new();
     for id in to_mark_retreat {
