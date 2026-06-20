@@ -5,18 +5,20 @@ pub struct GameClock;
 
 impl GameClock {
     /// 推进游戏 1 小时, 触发相应钩子
+    /// 注: 用 % 而非 is_multiple_of, 保持对 Rust <1.87 的兼容(Cargo.toml 未钉版本)
+    #[allow(clippy::manual_is_multiple_of)]
     pub fn tick(interp: &Interpreter, world: &mut World) {
         world.hour += 1;
         world.fire_event(interp, "on_hourly");
         // M3 接入: combat::resolve / production::produce / movement::update
-        if world.hour.is_multiple_of(24) {
+        if world.hour % 24 == 0 {
             world.fire_event(interp, "on_daily");
             world.fire_event(interp, &format!("on_daily_{}", world.player_tag));
         }
-        if world.hour.is_multiple_of(24 * 7) {
+        if world.hour % (24 * 7) == 0 {
             world.fire_event(interp, "on_weekly");
         }
-        if world.hour.is_multiple_of(24 * 30) {
+        if world.hour % (24 * 30) == 0 {
             world.fire_event(interp, "on_monthly");
         }
     }
