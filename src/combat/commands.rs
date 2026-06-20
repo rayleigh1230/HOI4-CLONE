@@ -182,15 +182,17 @@ pub fn register(reg: &mut Registry) {
             .filter(|d| d.location_province == target && d.owner_tag != owner)
             .map(|d| d.id)
             .collect();
-        let is_attack = !enemies.is_empty();
+        // 进军判定: 目标省非己方控制 → 进军红箭头(无论有无敌军)
+        let target_controller = w.provinces.get(&target).map(|p| p.controller.as_str()).unwrap_or("");
+        let is_hostile = target_controller != owner;
         // 设移动状态
         if let Some(d) = w.divisions.get_mut(&div_id) {
             d.destination = Some(target);
             d.move_progress = 0.0;
-            d.attacking = is_attack;
+            d.attacking = is_hostile; // 进军(敌方地块)=红
         }
-        // 进攻移动: 立刻开战
-        if is_attack {
+        // 有敌军防守 → 立刻开战(无敌军则直接进军占领)
+        if !enemies.is_empty() {
             let battle_id = w.next_battle_id;
             w.next_battle_id += 1;
             w.battles.push(Battle { id: battle_id, province: target, attackers: vec![div_id], defenders: enemies });

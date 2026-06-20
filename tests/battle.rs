@@ -603,3 +603,40 @@ fn move_to_empty_province_no_battle() {
     GameClock::advance(&interp, &mut world, 10);
     assert_eq!(world.divisions.get(&ger_id).unwrap().location_province, 10, "应到达省10");
 }
+
+#[test]
+fn march_into_empty_enemy_province_captures() {
+    // 进军无防御的敌方地块 → 红箭头 + 到达占领
+    use hoi4_clone::runtime::GameClock;
+    let mut reg = Registry::new();
+    register_all(&mut reg);
+    let interp = Interpreter::new(reg);
+    let mut world = World::new();
+    world.player_tag = "GER".into();
+    world.countries.insert("GER".into(), Default::default());
+    // 省1(GER) 邻接 省2(FRA空省, 无防御部队)
+    world.provinces.insert(1, hoi4_clone::runtime::Province {
+        id: 1, owner: "GER".into(), controller: "GER".into(),
+        terrain: "plains".into(), neighbors: vec![2],
+    });
+    world.provinces.insert(2, hoi4_clone::runtime::Province {
+        id: 2, owner: "FRA".into(), controller: "FRA".into(),
+        terrain: "plains".into(), neighbors: vec![1],
+    });
+    run_setup(&mut world, &interp, r#"
+        _setup = { create_division = { owner = GER location = 1 equipment = infantry_equipment battalions = 7 } }
+    "#);
+    let ger_id = world.divisions.values().find(|d| d.owner_tag == "GER").unwrap().id;
+    // 命令 GER 师进军省2(FRA空省)
+    let move_effs = hoi4_clone::ast::lower::lower_effects(
+        &hoi4_clone::parser::parse("move_division = { division = 1 target = 2 }").unwrap()
+    );
+    interp.run(&move_effs, &mut world);
+    // 应是进军(红), 无敌军不开战
+    assert!(world.divisions.get(&ger_id).unwrap().attacking, "进军敌方地块应红箭头");
+    assert_eq!(world.battles.len(), 0, "无防御部队不应开战");
+    // 推进到达(进军速度慢, 给足时间)
+    GameClock::advance(&interp, &mut world, 30);
+    assert_eq!(world.divisions.get(&ger_id).unwrap().location_province, 2, "应到达省2");
+    assert_eq!(world.provinces.get(&2).unwrap().controller, "GER", "到达应占领省2");
+}
