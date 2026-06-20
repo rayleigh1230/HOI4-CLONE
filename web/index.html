@@ -56,8 +56,10 @@ add_equipment = { owner = FRA type = infantry_equipment amount = 700 }
 add_manpower = { owner = GER amount = 10000 }
 add_manpower = { owner = FRA amount = 10000 }
 create_division = { owner = GER location = 1 equipment = medium_tank battalions = 7 }
-create_division = { owner = FRA location = 1 soft_attack = 3 hard_attack = 0.5 defense = 20 breakthrough = 2 max_org = 200 max_strength = 100 equipment = infantry_equipment }
-start_battle = { attacker = GER defender = FRA province = 1 }</textarea>
+create_division = { owner = FRA location = 1 equipment = infantry_equipment battalions = 7 }
+start_battle = { attacker = GER defender = FRA province = 1 }
+# 正常: FRA org先归零→撤退到省3(🚩📍1→3)
+# 想看歼灭: 把省3的owner改成GER(包围), FRA无路可退→💀</textarea>
     <div class="controls">
       <button onclick="loadScript()">应用场景</button>
       <button class="secondary" onclick="tick(1)">▶ 推进1小时</button>
