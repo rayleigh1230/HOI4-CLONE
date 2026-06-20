@@ -35,16 +35,14 @@ impl Interpreter {
             }
             Effect::ForEach { scope, filter, body } => {
                 // M1: 作用域遍历简化为"执行一次"(不实际枚举省份/国家)
-                if filter.as_ref().map_or(true, |t| self.eval(t, world)) {
+                if filter.as_ref().is_none_or(|t| self.eval(t, world)) {
                     eprintln!("[info] {scope}: 执行作用域体(M1 简化为单次)");
                     self.run(body, world);
                 }
             }
             Effect::Random { table } => {
-                if let Some((_, pick)) = table.first() {
-                    if let crate::ast::RandomPick::EventId(id) = pick {
-                        eprintln!("[info] random_events 选中: {id} (M1 不触发事件)");
-                    }
+                if let Some((_, crate::ast::RandomPick::EventId(id))) = table.first() {
+                    eprintln!("[info] random_events 选中: {id} (M1 不触发事件)");
                 }
             }
         }
