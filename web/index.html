@@ -21,6 +21,17 @@
   .divisions { display: flex; flex-direction: column; gap: 10px; }
   #mapCanvas { width: 100%; height: 280px; background: #0a0a1a; border: 1px solid #0f3460; border-radius: 4px; cursor: pointer; margin-bottom: 10px; }
   .map-hint { font-size: 11px; color: #888; margin-bottom: 8px; }
+  .combat-window { background: #0a0a1a; border: 1px solid #0f3460; border-radius: 4px; padding: 10px; margin-bottom: 10px; font-size: 12px; }
+  .combat-title { color: #e94560; font-weight: bold; margin-bottom: 6px; }
+  .combat-row { display: flex; gap: 8px; margin: 4px 0; align-items: center; }
+  .combat-side { flex: 1; }
+  .combat-side-label { font-size: 10px; color: #888; margin-bottom: 2px; }
+  .combat-chip { display: inline-block; padding: 2px 6px; margin: 1px; border-radius: 3px; font-size: 10px; }
+  .combat-chip.ger { background: #e9456044; border: 1px solid #e94560; }
+  .combat-chip.fra { background: #16c79a44; border: 1px solid #16c79a; }
+  .combat-vs { color: #888; font-size: 11px; }
+  .combat-reserve { font-size: 10px; color: #888; margin-top: 4px; }
+  .combat-reserve .combat-chip { opacity: 0.6; }
   .div-card { background: #0a0a1a; border-left: 4px solid #0f3460; border-radius: 4px; padding: 10px; }
   .div-card.attacker { border-left-color: #e94560; }
   .div-card.defender { border-left-color: #16c79a; }
@@ -166,14 +177,44 @@ function getState() {
 function refresh() {
   const state = getState();
   document.getElementById('hourDisplay').textContent = `游戏时间: 第 ${state.hour} 小时`;
+  // 交战实时视窗: 前线双方 + 预备队
   const bi = document.getElementById('battleInfo');
+  const divMap = {};
+  state.divisions.forEach(d => { divMap[d.id] = d; });
+  const chip = id => {
+    const d = divMap[id];
+    if (!d) return '';
+    const cls = d.owner === 'GER' ? 'ger' : 'fra';
+    return `<span class="combat-chip ${cls}">${d.owner}#${id}</span>`;
+  };
+  const sideChips = ids => (ids || []).map(chip).join('') || '<span style="color:#555">无</span>';
   if (state.battles && state.battles.length > 0) {
-    bi.innerHTML = state.battles.map(b =>
-      `⚔️省${b.prov}: 攻${b.atk}守${b.def}` +
-      ((b.res_atk || b.res_def) ? ` (预备:攻${b.res_atk||0}守${b.res_def||0})` : '')
-    ).join('<br>');
+    bi.innerHTML = state.battles.map(b => {
+      const atkOwner = divMap[b.atk[0]] ? divMap[b.atk[0]].owner : '?';
+      const defOwner = divMap[b.def[0]] ? divMap[b.def[0]].owner : '?';
+      const resAtk = (b.res_atk && b.res_atk.length > 0);
+      const resDef = (b.res_def && b.res_def.length > 0);
+      return `<div class="combat-window">
+        <div class="combat-title">⚔️ 省${b.prov} 交战</div>
+        <div class="combat-row">
+          <div class="combat-side">
+            <div class="combat-side-label">攻方前线 (${atkOwner})</div>
+            ${sideChips(b.atk)}
+          </div>
+          <div class="combat-vs">VS</div>
+          <div class="combat-side">
+            <div class="combat-side-label">守方前线 (${defOwner})</div>
+            ${sideChips(b.def)}
+          </div>
+        </div>
+        ${(resAtk || resDef) ? `<div class="combat-reserve">
+          <div class="combat-side-label">预备队(2%/h补位)</div>
+          攻:${sideChips(b.res_atk)} 守:${sideChips(b.res_def)}
+        </div>` : ''}
+      </div>`;
+    }).join('');
   } else {
-    bi.textContent = '无活跃战斗';
+    bi.innerHTML = '<div class="combat-window"><div class="combat-title">和平</div>无活跃战斗</div>';
   }
 
   const container = document.getElementById('divisions');

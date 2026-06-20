@@ -180,11 +180,14 @@ fn serialize_state(world: &World) -> String {
     for b in &world.battles {
         if !bfirst { s.push(','); }
         bfirst = false;
+        let ids = |v: &[u64]| -> String {
+            v.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(",")
+        };
         s.push_str(&format!(
-            "{{\"id\":{},\"prov\":{},\"atk\":{},\"def\":{},\"res_atk\":{},\"res_def\":{}}}",
+            "{{\"id\":{},\"prov\":{},\"atk\":[{}],\"def\":[{}],\"res_atk\":[{}],\"res_def\":[{}]}}",
             b.id, b.province,
-            b.attackers.len(), b.defenders.len(),
-            b.reserve_attackers.len(), b.reserve_defenders.len()
+            ids(&b.attackers), ids(&b.defenders),
+            ids(&b.reserve_attackers), ids(&b.reserve_defenders)
         ));
     }
     s.push_str("]");
