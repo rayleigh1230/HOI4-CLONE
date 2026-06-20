@@ -22,36 +22,77 @@ pub fn register(reg: &mut Registry) {
             .ok_or_else(|| CmdError::RuntimeError("owner 应为字符串".into()))?;
         let loc = num_of(np(p, "create_division", "location")?)? as u32;
         let opt_num = |k: &str| ParamGet::get(p, k).and_then(Arg::as_num);
-        let max_org = opt_num("max_org").unwrap_or(60.0);
-        let max_str = opt_num("max_strength").unwrap_or(100.0);
-        // M4a: 装备需求/持有。equipment=类型, equipment_amount=数量(默认100)
+        // 支持两种建师方式:
+        // 1) 按营数: battalions=7 + equipment=infantry_equipment → 自动算真实数值(1936)
+        // 2) 手填: 显式给 soft_attack/defense/... (兼容旧脚本)
+        let (sa, ha, df, br, ar, pr, hd, cw, max_org, max_str, mp_total, eq_amt) =
+            if let Some(bn) = opt_num("battalions") {
+                // 按营数 + 装备查表
+                let eq_name = ParamGet::get(p, "equipment").and_then(Arg::as_str).unwrap_or("infantry_equipment");
+                let e = crate::combat::equipment_data::find_equipment(eq_name)
+                    .copied()
+                    .unwrap_or_else(|| {
+                        // 未知装备退回步兵
+                        crate::combat::equipment_data::find_equipment("infantry_equipment").unwrap().clone()
+                    });
+                let n = bn;
+                (
+                    n * e.soft_attack,
+                    n * e.hard_attack,
+                    n * e.defense,
+                    n * e.breakthrough,
+                    e.armor,  // 装甲取最高(简化), 不×营数
+                    e.piercing,
+                    e.hardness,
+                    n * crate::combat::equipment_data::BATTALION_WIDTH,
+                    crate::combat::equipment_data::BATTALION_ORG, // org 加权平均(同类营)
+                    n * crate::combat::equipment_data::BATTALION_HP,
+                    n * crate::combat::equipment_data::BATTALION_MANPOWER,
+                    n * crate::combat::equipment_data::BATTALION_EQUIPMENT_NEED,
+                )
+            } else {
+                // 手填(兼容)
+                (
+                    opt_num("soft_attack").unwrap_or(21.0),
+                    opt_num("hard_attack").unwrap_or(3.5),
+                    opt_num("defense").unwrap_or(140.0),
+                    opt_num("breakthrough").unwrap_or(14.0),
+                    opt_num("armor").unwrap_or(0.0),
+                    opt_num("piercing").unwrap_or(7.0),
+                    opt_num("hardness").unwrap_or(0.0),
+                    opt_num("combat_width").unwrap_or(14.0),
+                    opt_num("max_org").unwrap_or(60.0),
+                    opt_num("max_strength").unwrap_or(175.0),
+                    opt_num("manpower").unwrap_or(7000.0),
+                    100.0,
+                )
+            };
+        // 装备需求/持有(按算出的 eq_amt 满编)
+        let eq_name = ParamGet::get(p, "equipment").and_then(Arg::as_str).unwrap_or("infantry_equipment");
         let mut eq_need = std::collections::HashMap::new();
         let mut eq_held = std::collections::HashMap::new();
-        if let Some(eq_type) = ParamGet::get(p, "equipment").and_then(Arg::as_str) {
-            let amt = opt_num("equipment_amount").unwrap_or(100.0);
-            eq_need.insert(eq_type.to_string(), amt);
-            eq_held.insert(eq_type.to_string(), amt); // 建师时满编
-        }
+        eq_need.insert(eq_name.to_string(), eq_amt);
+        eq_held.insert(eq_name.to_string(), eq_amt); // 建师时满编
         let d = Division {
             id: 0,
             owner_tag: owner.into(),
             location_province: loc,
-            soft_attack: opt_num("soft_attack").unwrap_or(10.0),
-            hard_attack: opt_num("hard_attack").unwrap_or(2.0),
-            defense: opt_num("defense").unwrap_or(20.0),
-            breakthrough: opt_num("breakthrough").unwrap_or(5.0),
-            armor: opt_num("armor").unwrap_or(0.0),
-            piercing: opt_num("piercing").unwrap_or(5.0),
-            hardness: opt_num("hardness").unwrap_or(0.0),
-            combat_width: opt_num("combat_width").unwrap_or(10.0),
+            soft_attack: sa,
+            hard_attack: ha,
+            defense: df,
+            breakthrough: br,
+            armor: ar,
+            piercing: pr,
+            hardness: hd,
+            combat_width: cw,
             max_org,
             org: max_org,
             max_strength: max_str,
             strength: max_str,
             equipment_need: eq_need,
             equipment_held: eq_held,
-            manpower_need: opt_num("manpower").unwrap_or(1000.0),
-            manpower_held: opt_num("manpower").unwrap_or(1000.0),
+            manpower_need: mp_total,
+            manpower_held: mp_total,
             retreating: false,
         };
         w.add_division(d);
