@@ -3,12 +3,13 @@ name = "hoi4_clone"
 version = "0.1.0"
 edition = "2021"
 
-# M1: 零外部依赖,纯标准库实现
-# (serde/thiserror 待网络可用后在 M2 引入,用于存档序列化)
+# M1-M3: 零外部依赖,纯标准库实现
+# WASM: cdylib 产出可被 JS 加载的 wasm 模块; rlib 保证 test/bin 正常
 
 [lib]
 name = "hoi4_clone"
 path = "src/lib.rs"
+crate-type = ["cdylib", "rlib"]
 
 [[bin]]
 name = "hoi4_demo"

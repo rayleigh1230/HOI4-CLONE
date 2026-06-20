@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>hoi4-clone 战斗观察器</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: "Segoe UI", "Microsoft YaHei", sans-serif; background: #1a1a2e; color: #e0e0e0; padding: 16px; }
+  h1 { color: #e94560; margin-bottom: 12px; font-size: 20px; }
+  .layout { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; max-width: 1200px; margin: 0 auto; }
+  .panel { background: #16213e; border: 1px solid #0f3460; border-radius: 8px; padding: 14px; }
+  .panel h2 { color: #e94560; font-size: 15px; margin-bottom: 10px; border-bottom: 1px solid #0f3460; padding-bottom: 6px; }
+  textarea { width: 100%; height: 180px; background: #0a0a1a; color: #7ec8e3; border: 1px solid #0f3460; border-radius: 4px; padding: 8px; font-family: Consolas, monospace; font-size: 12px; resize: vertical; }
+  .controls { display: flex; gap: 8px; margin: 12px 0; flex-wrap: wrap; }
+  button { background: #e94560; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 13px; transition: background 0.2s; }
+  button:hover { background: #c81e45; }
+  button:disabled { background: #555; cursor: not-allowed; }
+  button.secondary { background: #0f3460; }
+  button.secondary:hover { background: #1a4a80; }
+  .status-bar { font-size: 12px; color: #7ec8e3; margin: 8px 0; }
+  .divisions { display: flex; flex-direction: column; gap: 10px; }
+  .div-card { background: #0a0a1a; border-left: 4px solid #0f3460; border-radius: 4px; padding: 10px; }
+  .div-card.attacker { border-left-color: #e94560; }
+  .div-card.defender { border-left-color: #16c79a; }
+  .div-card.broken { opacity: 0.5; }
+  .div-head { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 6px; }
+  .div-owner { font-weight: bold; }
+  .bar-row { display: flex; align-items: center; gap: 8px; margin: 4px 0; font-size: 11px; }
+  .bar-label { width: 32px; color: #aaa; }
+  .bar-track { flex: 1; height: 14px; background: #1a1a2e; border-radius: 7px; overflow: hidden; }
+  .bar-fill { height: 100%; transition: width 0.3s; }
+  .bar-fill.org { background: linear-gradient(90deg, #16c79a, #4cd964); }
+  .bar-fill.str { background: linear-gradient(90deg, #e94560, #ff6b6b); }
+  .bar-val { width: 50px; text-align: right; color: #ccc; font-family: monospace; }
+  .battle-info { font-size: 12px; color: #aaa; margin-top: 8px; }
+  #log { height: 100px; overflow-y: auto; background: #0a0a1a; border: 1px solid #0f3460; border-radius: 4px; padding: 6px; font-family: monospace; font-size: 11px; color: #7ec8e3; margin-top: 10px; }
+  .loading { color: #e94560; text-align: center; padding: 40px; font-size: 16px; }
+</style>
+</head>
+<body>
+<h1>⚔️ hoi4-clone 战斗观察器</h1>
+<div class="status-bar" id="loadStatus">正在加载 WASM 引擎...</div>
+
+<div class="layout" id="app" style="display:none">
+  <div class="panel">
+    <h2>📋 场景设置 (HOI4 风格脚本)</h2>
+    <textarea id="script">create_division = { owner = GER location = 1 soft_attack = 100 hard_attack = 5 defense = 40 breakthrough = 10 armor = 0 piercing = 10 max_org = 60 max_strength = 20 }
+create_division = { owner = FRA location = 1 soft_attack = 80 hard_attack = 4 defense = 40 breakthrough = 8 armor = 0 piercing = 10 max_org = 60 max_strength = 20 }
+start_battle = { attacker = GER defender = FRA province = 1 }</textarea>
+    <div class="controls">
+      <button onclick="loadScript()">应用场景</button>
+      <button class="secondary" onclick="tick(1)">▶ 推进1小时</button>
+      <button class="secondary" onclick="tick(24)">⏩ 推进1天</button>
+      <button class="secondary" onclick="autoRun()">⏭ 自动战斗</button>
+      <button class="secondary" onclick="reset()">↺ 重置</button>
+    </div>
+    <div class="status-bar" id="hourDisplay">游戏时间: 第 0 小时</div>
+    <div id="log"></div>
+  </div>
+
+  <div class="panel">
+    <h2>🪖 战场态势</h2>
+    <div class="battle-info" id="battleInfo"></div>
+    <div class="divisions" id="divisions"></div>
+  </div>
+</div>
+
+<script>
+let wasm = null;
+let autoTimer = null;
+
+// WASM 内存读取: 把 Rust 返回的 null-terminated C 字符串读成 JS string
+function readCString(ptr) {
+  const mem = new Uint8Array(wasm.exports.memory.buffer);
+  let end = ptr;
+  while (mem[end] !== 0) end++;
+  return new TextDecoder('utf-8').decode(mem.subarray(ptr, end));
+}
+
+// 传 JS string 给 Rust: 编码后写入 wasm 内存, 返回 {ptr, len}
+function passStr(str) {
+  const bytes = new TextEncoder().encode(str);
+  const ptr = wasm.exports.engine_alloc(bytes.length);
+  const mem = new Uint8Array(wasm.exports.memory.buffer);
+  mem.set(bytes, ptr);
+  return { ptr, len: bytes.length };
+}
+
+async function loadWasm() {
+  const resp = await fetch('hoi4_clone.wasm');
+  const bytes = await resp.arrayBuffer();
+  const result = await WebAssembly.instantiate(bytes, { env: {} });
+  wasm = result.instance;
+  document.getElementById('loadStatus').textContent = '✓ WASM 引擎加载完成 (178KB)';
+  document.getElementById('app').style.display = 'grid';
+  loadScript();
+}
+
+function log(msg) {
+  const el = document.getElementById('log');
+  el.innerHTML += msg + '<br>';
+  el.scrollTop = el.scrollHeight;
+}
+
+function loadScript() {
+  const script = document.getElementById('script').value;
+  const { ptr, len } = passStr(script);
+  // 设置玩家国家为 GER(简化: demo 固定)
+  const player = passStr('GER');
+  wasm.exports.engine_set_player(player.ptr, player.len);
+  const rc = wasm.exports.engine_run_setup(ptr, len);
+  if (rc !== 0) {
+    log('⚠️ 脚本错误, code=' + rc);
+  } else {
+    log('✓ 场景已加载');
+  }
+  refresh();
+}
+
+function tick(hours) {
+  wasm.exports.engine_tick(hours);
+  refresh();
+}
+
+function autoRun() {
+  if (autoTimer) { clearInterval(autoTimer); autoTimer = null; log('⏸ 暂停'); return; }
+  autoTimer = setInterval(() => {
+    tick(1);
+    const state = getState();
+    const allBroken = state.divisions.every(d => d.broken || d.owner !== state.player);
+    if (allBroken) { clearInterval(autoTimer); autoTimer = null; log('🏁 战斗结束'); }
+  }, 200);
+  log('▶ 自动战斗中...');
+}
+
+function reset() {
+  if (autoTimer) { clearInterval(autoTimer); autoTimer = null; }
+  wasm.exports.engine_reset();
+  document.getElementById('log').innerHTML = '';
+  log('↺ 已重置');
+  loadScript();
+}
+
+function getState() {
+  const ptr = wasm.exports.engine_get_state();
+  const json = readCString(ptr);
+  return JSON.parse(json);
+}
+
+function refresh() {
+  const state = getState();
+  document.getElementById('hourDisplay').textContent = `游戏时间: 第 ${state.hour} 小时`;
+  document.getElementById('battleInfo').textContent = `活跃战斗: ${state.battles} 场`;
+
+  const container = document.getElementById('divisions');
+  container.innerHTML = '';
+  for (const d of state.divisions) {
+    const card = document.createElement('div');
+    card.className = 'div-card ' + (d.owner === 'GER' ? 'attacker' : 'defender') + (d.broken ? ' broken' : '');
+    const orgPct = d.max_org > 0 ? (d.org / d.max_org * 100) : 0;
+    const strPct = d.max_str > 0 ? (d.str / d.max_str * 100) : 0;
+    card.innerHTML = `
+      <div class="div-head">
+        <span class="div-owner">${d.owner} 师 #${d.id} ${d.broken ? '💀 破阵' : ''}</span>
+      </div>
+      <div class="bar-row">
+        <span class="bar-label">组织</span>
+        <div class="bar-track"><div class="bar-fill org" style="width:${orgPct}%"></div></div>
+        <span class="bar-val">${d.org.toFixed(1)}/${d.max_org.toFixed(0)}</span>
+      </div>
+      <div class="bar-row">
+        <span class="bar-label">HP</span>
+        <div class="bar-track"><div class="bar-fill str" style="width:${strPct}%"></div></div>
+        <span class="bar-val">${d.str.toFixed(1)}/${d.max_str.toFixed(0)}</span>
+      </div>`;
+    container.appendChild(card);
+  }
+}
+
+loadWasm();
+</script>
+</body>
+</html>
