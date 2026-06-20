@@ -23,7 +23,7 @@ pub fn register(reg: &mut Registry) {
         let loc = num_of(np(p, "create_division", "location")?)? as u32;
         let opt_num = |k: &str| ParamGet::get(p, k).and_then(Arg::as_num);
         let max_org = opt_num("max_org").unwrap_or(60.0);
-        let max_str = opt_num("max_strength").unwrap_or(20.0);
+        let max_str = opt_num("max_strength").unwrap_or(100.0);
         // M4a: 装备需求/持有。equipment=类型, equipment_amount=数量(默认100)
         let mut eq_need = std::collections::HashMap::new();
         let mut eq_held = std::collections::HashMap::new();
@@ -52,6 +52,7 @@ pub fn register(reg: &mut Registry) {
             equipment_held: eq_held,
             manpower_need: opt_num("manpower").unwrap_or(1000.0),
             manpower_held: opt_num("manpower").unwrap_or(1000.0),
+            retreating: false,
         };
         w.add_division(d);
         Ok(())

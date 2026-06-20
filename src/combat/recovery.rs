@@ -21,7 +21,9 @@ pub fn recover_org(world: &mut World) {
             continue; // 战斗中不恢复
         }
         if div.org >= div.max_org {
-            continue; // 已满
+            // 恢复满了, 清除撤退标志(师重回可用状态)
+            div.retreating = false;
+            continue;
         }
         // 每小时恢复量, 受补给充足度影响(缺装备/人力的师恢复慢)
         let hourly = div.max_org * DAILY_ORG_RECOVERY_RATE / 24.0;

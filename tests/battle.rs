@@ -51,8 +51,8 @@ fn two_divisions_battle_deals_damage() {
     let org_before = world.divisions.get(&fra_id).unwrap().org;
     assert!((org_before - 60.0).abs() < 1e-9, "初始 org 应为 60");
 
-    // 推进 24 小时(战斗每小时结算)
-    GameClock::advance(&interp, &mut world, 24);
+    // 推进 5 小时(短时, 避免歼灭; 验证 org 下降)
+    GameClock::advance(&interp, &mut world, 5);
 
     let org_after = world.divisions.get(&fra_id).unwrap().org;
     assert!(
@@ -173,8 +173,8 @@ fn equipment_degrades_in_combat_and_reinforces() {
     run_setup(&mut world, &interp, r#"
         _setup = {
             add_equipment = { owner = GER type = inf amount = 50 }
-            create_division = { owner = GER location = 1 soft_attack = 200 defense = 5 max_org = 60 max_strength = 20 equipment = inf equipment_amount = 100 }
-            create_division = { owner = FRA location = 1 soft_attack = 0 defense = 0 max_org = 60 max_strength = 20 equipment = inf equipment_amount = 100 }
+            create_division = { owner = GER location = 1 soft_attack = 200 defense = 5 max_org = 60 equipment = inf equipment_amount = 100 }
+            create_division = { owner = FRA location = 1 soft_attack = 0 defense = 0 max_org = 60 equipment = inf equipment_amount = 100 }
             start_battle = { attacker = GER defender = FRA province = 1 }
         }
     "#);
@@ -241,7 +241,7 @@ fn battle_continues_while_both_sides_alive() {
     let mut world = setup_world();
     run_setup(&mut world, &interp, r#"
         _setup = {
-            create_division = { owner = GER location = 1 soft_attack = 30 defense = 100 max_org = 100 }
+            create_division = { owner = GER location = 1 soft_attack = 30 defense = 100 breakthrough = 100 max_org = 100 }
             create_division = { owner = FRA location = 1 soft_attack = 30 defense = 100 max_org = 100 }
             start_battle = { attacker = GER defender = FRA province = 1 }
         }
@@ -265,8 +265,8 @@ fn manpower_consumed_and_reinforced() {
         _setup = {
             add_manpower = { owner = GER amount = 500 }
             add_manpower = { owner = FRA amount = 0 }
-            create_division = { owner = GER location = 1 soft_attack = 200 defense = 5 max_org = 60 max_strength = 20 manpower = 1000 }
-            create_division = { owner = FRA location = 1 soft_attack = 0 defense = 0 max_org = 60 max_strength = 20 manpower = 1000 }
+            create_division = { owner = GER location = 1 soft_attack = 200 defense = 5 max_org = 60 manpower = 1000 }
+            create_division = { owner = FRA location = 1 soft_attack = 0 defense = 0 max_org = 60 manpower = 1000 }
             start_battle = { attacker = GER defender = FRA province = 1 }
         }
     "#);
@@ -313,4 +313,54 @@ fn org_recovers_after_battle_ends() {
         org_recovered > org_right_after,
         "脱离战斗后 org 应回升: at_break={org_at_break} after={org_right_after} recovered={org_recovered}"
     );
+}
+
+#[test]
+fn annihilated_division_removed_from_world() {
+    // HP 归零 → 歼灭: 师从 world.divisions 彻底删除(番号撤销)
+    use hoi4_clone::runtime::GameClock;
+    let mut reg = Registry::new();
+    register_all(&mut reg);
+    let interp = Interpreter::new(reg);
+    let mut world = setup_world();
+    // FRA 极弱(HP=5, defense=0), GER 强攻 → FRA HP 快速归零 → 歼灭
+    run_setup(&mut world, &interp, r#"
+        _setup = {
+            create_division = { owner = GER location = 1 soft_attack = 500 defense = 100 breakthrough = 100 max_org = 60 }
+            create_division = { owner = FRA location = 1 soft_attack = 0 defense = 0 max_org = 60 max_strength = 5 }
+            start_battle = { attacker = GER defender = FRA province = 1 }
+        }
+    "#);
+    assert_eq!(world.divisions.len(), 2);
+    GameClock::advance(&interp, &mut world, 30);
+    // FRA 应被歼灭(HP 归零), 从世界删除
+    assert_eq!(world.divisions.len(), 1, "FRA 应被歼灭删除, 只剩 GER");
+    assert!(world.divisions.values().all(|d| d.owner_tag == "GER"), "只剩 GER");
+    assert_eq!(world.battles.len(), 0, "战斗应结束");
+}
+
+#[test]
+fn retreating_division_preserved_not_annihilated() {
+    // org 归零 + HP 有余 → 撤退: 师保留(标 retreating), 不删除
+    use hoi4_clone::runtime::GameClock;
+    let mut reg = Registry::new();
+    register_all(&mut reg);
+    let interp = Interpreter::new(reg);
+    let mut world = setup_world();
+    // GER 攻 FRA: 让 FRA org 归零但 HP 保留
+    // FRA defense 高(防 HP 损失), 但 soft_attack=0 不反击, GER 稳定输出 org 伤害
+    run_setup(&mut world, &interp, r#"
+        _setup = {
+            create_division = { owner = GER location = 1 soft_attack = 200 defense = 100 breakthrough = 100 max_org = 60 }
+            create_division = { owner = FRA location = 1 soft_attack = 0 defense = 200 max_org = 30 max_strength = 100 }
+            start_battle = { attacker = GER defender = FRA province = 1 }
+        }
+    "#);
+    let fra_id = world.divisions.values().find(|d| d.owner_tag == "FRA").unwrap().id;
+    GameClock::advance(&interp, &mut world, 40);
+    // FRA 应撤退(org 归零, HP 有余), 师仍存在
+    assert!(world.divisions.contains_key(&fra_id), "撤退的师应保留, 不删除");
+    let fra = world.divisions.get(&fra_id).unwrap();
+    assert!(fra.strength > 0.0, "撤退师 HP 应有余: {}", fra.strength);
+    assert_eq!(world.battles.len(), 0, "撤退后战斗应结束");
 }

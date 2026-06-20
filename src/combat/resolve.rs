@@ -224,9 +224,11 @@ pub fn resolve_all_battles(world: &mut World) {
     cleanup_battles(world);
 }
 
-/// 移除破阵师, 结束一方全破的战斗
+/// 战斗生命周期: 区分撤退(org0+HP有)和歼灭(HP0)
+/// - 歼灭: 从 world.divisions 删除师(番号撤销)
+/// - 撤退: 标 retreating, 移出当前战斗(师保留, 待撤邻省)
+/// 一方全退(歼灭或撤退) → 战斗结束
 fn cleanup_battles(world: &mut World) {
-    // 先收集每场战斗的攻守存活情况(避免遍历时修改)
     let battle_specs: Vec<(usize, Vec<u64>, Vec<u64>)> = world
         .battles
         .iter()
@@ -234,21 +236,34 @@ fn cleanup_battles(world: &mut World) {
         .map(|(i, b)| (i, b.attackers.clone(), b.defenders.clone()))
         .collect();
 
-    // 对每场战斗: 过滤掉破阵师, 判定是否结束
     let mut battles_to_remove: Vec<usize> = Vec::new();
     let mut battle_updates: Vec<(usize, Vec<u64>, Vec<u64>)> = Vec::new();
+    let mut to_annihilate: Vec<u64> = Vec::new();
+    let mut to_mark_retreat: Vec<u64> = Vec::new();
+
     for (idx, atk_ids, def_ids) in &battle_specs {
-        let atk_alive: Vec<u64> = atk_ids
-            .iter()
-            .filter(|id| world.divisions.get(id).map(|d| !d.is_broken()).unwrap_or(false))
-            .copied()
-            .collect();
-        let def_alive: Vec<u64> = def_ids
-            .iter()
-            .filter(|id| world.divisions.get(id).map(|d| !d.is_broken()).unwrap_or(false))
-            .copied()
-            .collect();
-        // 攻方或守方全破 → 战斗结束
+        // 分类每方: 退出(歼灭/撤退)的移出, 存活的保留
+        let classify = |ids: &[u64]| -> (Vec<u64>, Vec<u64>, Vec<u64>) {
+            let mut alive = Vec::new();
+            let mut annihilated = Vec::new();
+            let mut retreating = Vec::new();
+            for id in ids {
+                match world.divisions.get(id) {
+                    Some(d) if d.is_annihilated() => annihilated.push(*id),
+                    Some(d) if d.is_retreating() => retreating.push(*id),
+                    Some(_) => alive.push(*id),
+                    None => annihilated.push(*id), // 已不存在的当歼灭
+                }
+            }
+            (alive, annihilated, retreating)
+        };
+        let (atk_alive, atk_ann, atk_ret) = classify(atk_ids);
+        let (def_alive, def_ann, def_ret) = classify(def_ids);
+        to_annihilate.extend(atk_ann);
+        to_annihilate.extend(def_ann);
+        to_mark_retreat.extend(atk_ret);
+        to_mark_retreat.extend(def_ret);
+
         if atk_alive.is_empty() || def_alive.is_empty() {
             battles_to_remove.push(*idx);
         } else if atk_alive.len() < atk_ids.len() || def_alive.len() < def_ids.len() {
@@ -256,12 +271,21 @@ fn cleanup_battles(world: &mut World) {
         }
     }
 
-    // 应用更新(部分破阵的战斗保留存活师)
+    // 标记撤退(保留师)
+    for id in to_mark_retreat {
+        if let Some(d) = world.divisions.get_mut(&id) {
+            d.retreating = true;
+        }
+    }
+    // 歼灭: 删除师
+    for id in to_annihilate {
+        world.divisions.remove(&id);
+    }
+    // 应用战斗更新
     for (idx, atk, def) in battle_updates {
         world.battles[idx].attackers = atk;
         world.battles[idx].defenders = def;
     }
-    // 移除结束的战斗(从后往前移, 避免索引错位)
     for idx in battles_to_remove.into_iter().rev() {
         world.battles.remove(idx);
     }

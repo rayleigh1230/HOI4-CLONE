@@ -43,6 +43,8 @@ pub struct Division {
     // 人力(陆战循环): 独立于装备的兵员资源
     pub manpower_need: f64,
     pub manpower_held: f64,
+    // 撤退标志: org 归零但 HP 有余 → 撤退(保留师, 移出战斗, 待撤邻省)
+    pub retreating: bool,
 }
 
 impl Division {
@@ -53,8 +55,18 @@ impl Division {
             0.0
         }
     }
+    /// HP 归零 → 歼灭(番号撤销, 师彻底消失)
+    pub fn is_annihilated(&self) -> bool {
+        self.strength <= 0.0
+    }
+    /// 组织度归零 + HP 有余 → 撤退(保留师, 移出战斗恢复)
+    /// 注意: 这是触发撤退的瞬间条件; 撤退后 retreating 标志持续, org 可能恢复
+    pub fn is_retreating(&self) -> bool {
+        self.org <= 0.0 && self.strength > 0.0
+    }
+    /// 已退出战斗(撤退中 或 歼灭) — 兼容旧调用
     pub fn is_broken(&self) -> bool {
-        self.org <= 0.0
+        self.retreating || self.is_annihilated()
     }
     /// 综合补给充足度(0-1): min(装备比, 人力比)。木桶效应, 短板决定。
     /// (原名 equipment_ratio, 保留以兼容调用; 实为四量模型的综合充足度)
