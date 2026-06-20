@@ -66,6 +66,43 @@ pub fn reinforce_all(world: &mut World) {
             }
         }
     }
+
+    // 人力增援: 各师从所属国家 manpower_pool 补人力(按 div id 顺序)
+    let mut mp_remaining: HashMap<String, f64> = world
+        .countries
+        .iter()
+        .map(|(t, c)| (t.clone(), c.manpower_pool))
+        .collect();
+    let mut div_ids2: Vec<u64> = world.divisions.keys().copied().collect();
+    div_ids2.sort_unstable();
+    // 收集 (div_id, transfer_amount)
+    let mut mp_transfers: Vec<(u64, f64)> = Vec::new();
+    for did in div_ids2 {
+        let div = match world.divisions.get(&did) {
+            Some(d) => d,
+            None => continue,
+        };
+        let shortage = (div.manpower_need - div.manpower_held).max(0.0);
+        if shortage <= 0.0 {
+            continue;
+        }
+        let available = *mp_remaining.get(&div.owner_tag).unwrap_or(&0.0);
+        let transfer = shortage.min(available);
+        if transfer > 0.0 {
+            *mp_remaining.get_mut(&div.owner_tag).unwrap() -= transfer;
+            mp_transfers.push((did, transfer));
+        }
+    }
+    // 写回人力
+    for (did, amt) in mp_transfers {
+        if let Some(div) = world.divisions.get_mut(&did) {
+            div.manpower_held += amt;
+        }
+        let tag = world.divisions.get(&did).map(|d| d.owner_tag.clone()).unwrap_or_default();
+        if let Some(country) = world.countries.get_mut(&tag) {
+            country.manpower_pool = (country.manpower_pool - amt).max(0.0);
+        }
+    }
 }
 
 #[cfg(test)]

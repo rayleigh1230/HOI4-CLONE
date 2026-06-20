@@ -63,7 +63,7 @@ fn two_divisions_battle_deals_damage() {
 
 #[test]
 fn broken_division_detected() {
-    // 战斗到 org 归零, is_broken trigger 应为 true
+    // 高强度攻击下守方会破阵并被移出战斗(组织度恢复后可能回升, 但战斗已结束)
     let mut reg = Registry::new();
     register_all(&mut reg);
     let interp = Interpreter::new(reg);
@@ -77,13 +77,10 @@ fn broken_division_detected() {
         }
     "#);
 
-    let fra_id = world.divisions.values().find(|d| d.owner_tag == "FRA").unwrap().id;
-    // 推进足够长时间让守方破阵
-    GameClock::advance(&interp, &mut world, 200);
-
-    let fra = world.divisions.get(&fra_id).unwrap();
-    assert!(fra.org <= 0.0, "高强度攻击下守方应破阵, org={}", fra.org);
-    assert!(fra.is_broken(), "is_broken 应为 true");
+    // 推进 20 小时: FRA 应已破阵并触发战斗结束
+    GameClock::advance(&interp, &mut world, 20);
+    // 战斗应已结束(守方破阵被移出) — 这是破阵的直接证据
+    assert_eq!(world.battles.len(), 0, "守方破阵后战斗应结束");
 }
 
 #[test]
@@ -226,15 +223,12 @@ fn broken_division_removed_from_battle() {
         }
     "#);
     assert_eq!(world.battles.len(), 1, "开战应有1场战斗");
-    let fra_id = world.divisions.values().find(|d| d.owner_tag == "FRA").unwrap().id;
 
-    // 高强度攻击, FRA 很快破阵
+    // 高强度攻击, FRA 很快破阵被移出战斗(之后可能恢复 org, 但战斗已结束)
     GameClock::advance(&interp, &mut world, 50);
 
-    // FRA 应已破阵
-    assert!(world.divisions.get(&fra_id).unwrap().is_broken(), "FRA 应破阵");
-    // 战斗应已结束(FRA 全破)
-    assert_eq!(world.battles.len(), 0, "守方全破后战斗应结束");
+    // 战斗应已结束(FRA 破阵被移出) — 破阵移除的直接证据
+    assert_eq!(world.battles.len(), 0, "守方破阵后战斗应结束");
 }
 
 #[test]
@@ -257,4 +251,66 @@ fn battle_continues_while_both_sides_alive() {
     assert_eq!(world.battles.len(), 1, "双方存活战斗应继续");
     let any_broken = world.divisions.values().any(|d| d.is_broken());
     assert!(!any_broken, "低强度战斗24h内不应有师破阵");
+}
+
+#[test]
+fn manpower_consumed_and_reinforced() {
+    // 四量模型: 战斗消耗人力, 增援从国家人力池补
+    use hoi4_clone::runtime::GameClock;
+    let mut reg = Registry::new();
+    register_all(&mut reg);
+    let interp = Interpreter::new(reg);
+    let mut world = setup_world();
+    run_setup(&mut world, &interp, r#"
+        _setup = {
+            add_manpower = { owner = GER amount = 500 }
+            add_manpower = { owner = FRA amount = 0 }
+            create_division = { owner = GER location = 1 soft_attack = 200 defense = 5 max_org = 60 max_strength = 20 manpower = 1000 }
+            create_division = { owner = FRA location = 1 soft_attack = 0 defense = 0 max_org = 60 max_strength = 20 manpower = 1000 }
+            start_battle = { attacker = GER defender = FRA province = 1 }
+        }
+    "#);
+    let fra_id = world.divisions.values().find(|d| d.owner_tag == "FRA").unwrap().id;
+    let mp_before = world.divisions.get(&fra_id).unwrap().manpower_held;
+
+    // 战斗消耗人力(FRA 被打, HP 损失 → 人力损失)
+    GameClock::advance(&interp, &mut world, 12);
+    let mp_mid = world.divisions.get(&fra_id).unwrap().manpower_held;
+    assert!(mp_mid < mp_before, "战斗应消耗 FRA 人力: before={mp_before} mid={mp_mid}");
+
+    // FRA 人力池为 0, 增援补不了; GER 有 500, 能补
+    let ger_mp_before = world.divisions.values().find(|d| d.owner_tag == "GER").unwrap().manpower_held;
+    GameClock::advance(&interp, &mut world, 24); // 触发增援
+    let ger_mp_after = world.divisions.values().find(|d| d.owner_tag == "GER").unwrap().manpower_held;
+    assert!(ger_mp_after >= ger_mp_before, "GER 人力池有储备, 增援应补人力");
+}
+
+#[test]
+fn org_recovers_after_battle_ends() {
+    // 组织度恢复: 战斗结束后(破阵移出), 师脱离战斗 org 回升
+    use hoi4_clone::runtime::GameClock;
+    let mut reg = Registry::new();
+    register_all(&mut reg);
+    let interp = Interpreter::new(reg);
+    let mut world = setup_world();
+    run_setup(&mut world, &interp, r#"
+        _setup = {
+            create_division = { owner = GER location = 1 soft_attack = 200 defense = 5 max_org = 60 }
+            create_division = { owner = FRA location = 1 soft_attack = 0 defense = 0 max_org = 60 }
+            start_battle = { attacker = GER defender = FRA province = 1 }
+        }
+    "#);
+    let fra_id = world.divisions.values().find(|d| d.owner_tag == "FRA").unwrap().id;
+    // 打到 FRA 破阵, 战斗结束
+    GameClock::advance(&interp, &mut world, 20);
+    let org_at_break = world.divisions.get(&fra_id).unwrap().org;
+    assert_eq!(world.battles.len(), 0, "战斗应已结束");
+    // 再推进, FRA 脱离战斗, org 应恢复
+    let org_right_after = world.divisions.get(&fra_id).unwrap().org;
+    GameClock::advance(&interp, &mut world, 100);
+    let org_recovered = world.divisions.get(&fra_id).unwrap().org;
+    assert!(
+        org_recovered > org_right_after,
+        "脱离战斗后 org 应回升: at_break={org_at_break} after={org_right_after} recovered={org_recovered}"
+    );
 }

@@ -118,7 +118,7 @@ fn apply_all_attackers(attackers: &[AtkStats], targets: &mut [&mut Division], po
             tgt.strength = (tgt.strength - str_dmg).max(0.0);
             let hp_loss = hp_before - tgt.strength;
             if hp_loss > 0.0 {
-                consume_equipment(tgt, hp_loss * EQUIPMENT_LOSS_FACTOR);
+                consume_losses(tgt, hp_loss);
             }
         }
     }
@@ -131,20 +131,33 @@ fn compute_hits(attacks: f64, def_pool: f64) -> f64 {
     defended * HIT_CHANCE_DEF_LEFT + undefended * HIT_CHANCE_NO_DEF
 }
 
-/// M4a: 按 HP 损失量扣装备(各装备类型按持有比例分摊)
-fn consume_equipment(div: &mut Division, total_loss: f64) {
-    let total_held: f64 = div.equipment_held.values().sum();
-    if total_held <= 0.0 {
+/// 按 HP 损失量扣装备和人力(四量模型)
+/// 装备: hp_loss × EQUIPMENT_LOSS_FACTOR(0.70), 各类型按持有比例分摊
+/// 人力: hp_loss × (manpower_need / max_strength), 即 1 HP 对应的兵员数
+fn consume_losses(div: &mut Division, hp_loss: f64) {
+    if hp_loss <= 0.0 {
         return;
     }
-    // 收集类型避免迭代时修改
-    let types: Vec<String> = div.equipment_held.keys().cloned().collect();
-    for eq_type in types {
-        let held = *div.equipment_held.get(&eq_type).unwrap_or(&0.0);
-        let share = held / total_held;
-        let loss = (total_loss * share).min(held);
-        *div.equipment_held.get_mut(&eq_type).unwrap() = held - loss;
+    // 装备消耗
+    let eq_loss = hp_loss * EQUIPMENT_LOSS_FACTOR;
+    let total_held: f64 = div.equipment_held.values().sum();
+    if total_held > 0.0 {
+        let types: Vec<String> = div.equipment_held.keys().cloned().collect();
+        for eq_type in types {
+            let held = *div.equipment_held.get(&eq_type).unwrap_or(&0.0);
+            let share = held / total_held;
+            let loss = (eq_loss * share).min(held);
+            *div.equipment_held.get_mut(&eq_type).unwrap() = held - loss;
+        }
     }
+    // 人力消耗: 1 HP = (manpower_need / max_strength) 人
+    let mp_per_hp = if div.max_strength > 0.0 {
+        div.manpower_need / div.max_strength
+    } else {
+        0.0
+    };
+    let mp_loss = (hp_loss * mp_per_hp).min(div.manpower_held);
+    div.manpower_held -= mp_loss;
 }
 
 /// World 级战斗结算: 遍历所有 battle, 每小时调用
@@ -203,6 +216,7 @@ pub fn resolve_all_battles(world: &mut World) {
             d.org = snap.org;
             d.strength = snap.strength;
             d.equipment_held = snap.equipment_held;
+            d.manpower_held = snap.manpower_held;
         }
     }
 

@@ -69,6 +69,16 @@ pub fn register(reg: &mut Registry) {
         Ok(())
     });
 
+    // 往国家人力池加兵员(陆战循环)
+    reg.register("add_manpower", |w, p| {
+        let owner = np(p, "add_manpower", "owner")?.as_str()
+            .ok_or_else(|| CmdError::RuntimeError("owner 应为字符串".into()))?;
+        let amt = num_of(np(p, "add_manpower", "amount")?)?;
+        let country = w.countries.entry(owner.into()).or_default();
+        country.manpower_pool += amt;
+        Ok(())
+    });
+
     // 开始战斗: 把两个 tag 的师设为攻守
     reg.register("start_battle", |w, p| {
         let attacker = np(p, "start_battle", "attacker")?.as_str()
