@@ -209,3 +209,52 @@ fn equipment_degrades_in_combat_and_reinforces() {
 
     let _ = ger_id;
 }
+
+#[test]
+fn broken_division_removed_from_battle() {
+    // P2-14: 破阵师从战斗移除, 一方全破则战斗结束
+    use hoi4_clone::runtime::GameClock;
+    let mut reg = Registry::new();
+    register_all(&mut reg);
+    let interp = Interpreter::new(reg);
+    let mut world = setup_world();
+    run_setup(&mut world, &interp, r#"
+        _setup = {
+            create_division = { owner = GER location = 1 soft_attack = 500 defense = 10 max_org = 60 }
+            create_division = { owner = FRA location = 1 soft_attack = 5 defense = 5 max_org = 30 }
+            start_battle = { attacker = GER defender = FRA province = 1 }
+        }
+    "#);
+    assert_eq!(world.battles.len(), 1, "开战应有1场战斗");
+    let fra_id = world.divisions.values().find(|d| d.owner_tag == "FRA").unwrap().id;
+
+    // 高强度攻击, FRA 很快破阵
+    GameClock::advance(&interp, &mut world, 50);
+
+    // FRA 应已破阵
+    assert!(world.divisions.get(&fra_id).unwrap().is_broken(), "FRA 应破阵");
+    // 战斗应已结束(FRA 全破)
+    assert_eq!(world.battles.len(), 0, "守方全破后战斗应结束");
+}
+
+#[test]
+fn battle_continues_while_both_sides_alive() {
+    // 双方都活着时战斗不结束
+    use hoi4_clone::runtime::GameClock;
+    let mut reg = Registry::new();
+    register_all(&mut reg);
+    let interp = Interpreter::new(reg);
+    let mut world = setup_world();
+    run_setup(&mut world, &interp, r#"
+        _setup = {
+            create_division = { owner = GER location = 1 soft_attack = 30 defense = 100 max_org = 100 }
+            create_division = { owner = FRA location = 1 soft_attack = 30 defense = 100 max_org = 100 }
+            start_battle = { attacker = GER defender = FRA province = 1 }
+        }
+    "#);
+    GameClock::advance(&interp, &mut world, 24);
+    // 低强度, 双方都应存活, 战斗继续
+    assert_eq!(world.battles.len(), 1, "双方存活战斗应继续");
+    let any_broken = world.divisions.values().any(|d| d.is_broken());
+    assert!(!any_broken, "低强度战斗24h内不应有师破阵");
+}
