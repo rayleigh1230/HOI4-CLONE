@@ -10,7 +10,7 @@ impl GameClock {
     pub fn tick(interp: &Interpreter, world: &mut World) {
         world.hour += 1;
         world.fire_event(interp, "on_hourly");
-        // M3 接入: combat::resolve / production::produce / movement::update
+        crate::combat::resolve::resolve_all_battles(world); // M3: 战斗结算
         if world.hour % 24 == 0 {
             world.fire_event(interp, "on_daily");
             world.fire_event(interp, &format!("on_daily_{}", world.player_tag));

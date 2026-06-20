@@ -9,4 +9,5 @@ pub fn register_all(reg: &mut Registry) {
     vars::register(reg);
     control::register(reg);
     scope::register(reg);
+    crate::combat::commands::register(reg);
 }
