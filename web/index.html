@@ -104,7 +104,7 @@ function passStr(str) {
 }
 
 async function loadWasm() {
-  const resp = await fetch('hoi4_clone.wasm');
+  const resp = await fetch('hoi4_clone.wasm?v=' + Date.now());
   const bytes = await resp.arrayBuffer();
   const result = await WebAssembly.instantiate(bytes, { env: {} });
   wasm = result.instance;
@@ -175,7 +175,7 @@ function refresh() {
     const card = document.createElement('div');
     let status;
     if (d.annihilated) status = '💀 歼灭';
-    else if (d.dest) status = '🚩 撤退中';
+    else if (d.dest) status = '🚩 撤退中→' + d.dest;
     else if (d.retreating) status = '🔄 恢复中';
     else if (d.org <= 0) status = '⚠️ 破阵';
     else status = '🛡️ 驻扎';
