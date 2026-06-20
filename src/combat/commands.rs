@@ -50,6 +50,8 @@ pub fn register(reg: &mut Registry) {
             strength: max_str,
             equipment_need: eq_need,
             equipment_held: eq_held,
+            manpower_need: opt_num("manpower").unwrap_or(1000.0),
+            manpower_held: opt_num("manpower").unwrap_or(1000.0),
         };
         w.add_division(d);
         Ok(())

@@ -14,6 +14,8 @@ pub struct Country {
     pub capital_state: u32,
     /// 装备库存(M4a): equipment_type → 数量
     pub equipment_stockpile: std::collections::HashMap<String, f64>,
+    /// 人力池(陆战循环): 国家征召的兵员储备
+    pub manpower_pool: f64,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -38,6 +40,9 @@ pub struct Division {
     // 装备(M4a): need=满编需求, held=当前持有
     pub equipment_need: std::collections::HashMap<String, f64>,
     pub equipment_held: std::collections::HashMap<String, f64>,
+    // 人力(陆战循环): 独立于装备的兵员资源
+    pub manpower_need: f64,
+    pub manpower_held: f64,
 }
 
 impl Division {
@@ -51,8 +56,19 @@ impl Division {
     pub fn is_broken(&self) -> bool {
         self.org <= 0.0
     }
-    /// 装备充足度(0-1): 当前持有/满编需求。影响有效属性。
+    /// 综合补给充足度(0-1): min(装备比, 人力比)。木桶效应, 短板决定。
+    /// (原名 equipment_ratio, 保留以兼容调用; 实为四量模型的综合充足度)
     pub fn equipment_ratio(&self) -> f64 {
+        self.supply_ratio()
+    }
+    /// 综合补给充足度 = min(装备充足度, 人力充足度)
+    pub fn supply_ratio(&self) -> f64 {
+        let eq = self.equipment_ratio_only();
+        let mp = self.manpower_ratio();
+        eq.min(mp)
+    }
+    /// 仅装备充足度
+    pub fn equipment_ratio_only(&self) -> f64 {
         let need: f64 = self.equipment_need.values().sum();
         let held: f64 = self.equipment_held.values().sum();
         if need > 0.0 {
@@ -61,12 +77,20 @@ impl Division {
             1.0
         }
     }
-    // M4a: 有效属性 = 面板值 × 装备充足度
+    /// 仅人力充足度
+    pub fn manpower_ratio(&self) -> f64 {
+        if self.manpower_need > 0.0 {
+            (self.manpower_held / self.manpower_need).clamp(0.0, 1.0)
+        } else {
+            1.0
+        }
+    }
+    // 有效属性 = 面板值 × 综合补给充足度
     pub fn effective_soft_attack(&self) -> f64 {
-        self.soft_attack * self.equipment_ratio()
+        self.soft_attack * self.supply_ratio()
     }
     pub fn effective_hard_attack(&self) -> f64 {
-        self.hard_attack * self.equipment_ratio()
+        self.hard_attack * self.supply_ratio()
     }
     pub fn effective_defense(&self) -> f64 {
         self.defense * self.equipment_ratio()
