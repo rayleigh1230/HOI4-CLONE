@@ -10,7 +10,12 @@
   .layout { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; max-width: 1200px; margin: 0 auto; }
   .panel { background: #16213e; border: 1px solid #0f3460; border-radius: 8px; padding: 14px; }
   .panel h2 { color: #e94560; font-size: 15px; margin-bottom: 10px; border-bottom: 1px solid #0f3460; padding-bottom: 6px; }
-  textarea { width: 100%; height: 180px; background: #0a0a1a; color: #7ec8e3; border: 1px solid #0f3460; border-radius: 4px; padding: 8px; font-family: Consolas, monospace; font-size: 12px; resize: vertical; }
+  textarea { width: 100%; height: 120px; background: #0a0a1a; color: #7ec8e3; border: 1px solid #0f3460; border-radius: 4px; padding: 8px; font-family: Consolas, monospace; font-size: 12px; resize: vertical; }
+  .deploy-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin: 8px 0; }
+  .deploy-grid label { font-size: 11px; color: #aaa; display: block; margin-bottom: 2px; }
+  .deploy-grid select, .deploy-grid input { width: 100%; background: #0a0a1a; color: #e0e0e0; border: 1px solid #0f3460; border-radius: 3px; padding: 4px; font-size: 12px; }
+  .deploy-actions { display: flex; gap: 6px; margin: 8px 0; flex-wrap: wrap; }
+  .deploy-actions button { padding: 6px 10px; font-size: 12px; }
   .controls { display: flex; gap: 8px; margin: 12px 0; flex-wrap: wrap; }
   button { background: #e94560; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 13px; transition: background 0.2s; }
   button:hover { background: #c81e45; }
@@ -60,26 +65,43 @@
 
 <div class="layout" id="app" style="display:none">
   <div class="panel">
-    <h2>📋 场景设置 (HOI4 风格脚本)</h2>
+    <h2>🚀 部署部队</h2>
+    <div class="deploy-grid">
+      <div>
+        <label>归属</label>
+        <select id="depOwner"><option>GER</option><option>FRA</option></select>
+      </div>
+      <div>
+        <label>地块</label>
+        <select id="depProv"><option>1</option><option>2</option><option>3</option></select>
+      </div>
+      <div>
+        <label>装备</label>
+        <select id="depEquip">
+          <option value="infantry_equipment">步兵装备</option>
+          <option value="medium_tank">中坦</option>
+          <option value="artillery">火炮</option>
+          <option value="light_tank">轻坦</option>
+          <option value="heavy_tank">重坦</option>
+        </select>
+      </div>
+      <div>
+        <label>营数</label>
+        <input type="number" id="depBn" value="7" min="1" max="25">
+      </div>
+    </div>
+    <div class="deploy-actions">
+      <button onclick="deployDiv()">➕ 部署师</button>
+      <button class="secondary" onclick="supply('GER')">补给GER</button>
+      <button class="secondary" onclick="supply('FRA')">补给FRA</button>
+    </div>
+    <details><summary class="map-hint">高级: 自定义脚本</summary>
     <textarea id="script">create_province = { id = 1 owner = FRA neighbors = { 2 3 } }
 create_province = { id = 2 owner = GER neighbors = { 1 } }
-create_province = { id = 3 owner = FRA neighbors = { 1 } }
-add_equipment = { owner = GER type = medium_tank amount = 2100 }
-add_equipment = { owner = FRA type = infantry_equipment amount = 2100 }
-add_manpower = { owner = GER amount = 30000 }
-add_manpower = { owner = FRA amount = 30000 }
-create_division = { owner = GER location = 2 equipment = medium_tank battalions = 7 }
-create_division = { owner = GER location = 2 equipment = medium_tank battalions = 7 }
-create_division = { owner = GER location = 2 equipment = medium_tank battalions = 7 }
-create_division = { owner = FRA location = 1 equipment = infantry_equipment battalions = 7 }
-create_division = { owner = FRA location = 1 equipment = infantry_equipment battalions = 7 }
-create_division = { owner = FRA location = 1 equipment = infantry_equipment battalions = 7 }
-# GER 3师(#1#2#3) 进攻省1(FRA 3师#4#5#6防守)
-move_division = { division = 1 target = 1 }
-move_division = { division = 2 target = 1 }
-move_division = { division = 3 target = 1 }</textarea>
+create_province = { id = 3 owner = FRA neighbors = { 1 } }</textarea>
+    <button class="secondary" onclick="loadScript()">运行脚本</button>
+    </details>
     <div class="controls">
-      <button onclick="loadScript()">应用场景</button>
       <button class="secondary" onclick="tick(1)">▶ 推进1小时</button>
       <button class="secondary" onclick="tick(24)">⏩ 推进1天</button>
       <button class="secondary" onclick="autoRun()">⏭ 自动战斗</button>
@@ -119,14 +141,41 @@ function passStr(str) {
   return { ptr, len: bytes.length };
 }
 
+// 部署师到地块
+function deployDiv() {
+  const owner = document.getElementById('depOwner').value;
+  const prov = parseInt(document.getElementById('depProv').value);
+  const equip = document.getElementById('depEquip').value;
+  const bn = parseInt(document.getElementById('depBn').value);
+  const o = passStr(owner), e = passStr(equip);
+  wasm.exports.engine_deploy_division(o.ptr, o.len, prov, e.ptr, e.len, bn);
+  // 自动补给(部署时自动给该方补装备+人力, 简化操作)
+  const ow = passStr(owner);
+  wasm.exports.engine_supply(ow.ptr, ow.len);
+  log(`部署 ${owner} ${bn}营${equip} 到省${prov}`);
+  refresh();
+}
+
+// 补给(装备+人力)
+function supply(owner) {
+  const o = passStr(owner);
+  wasm.exports.engine_supply(o.ptr, o.len);
+  log(`补给 ${owner}: 装备+人力已补满`);
+  refresh();
+}
+
 async function loadWasm() {
   const resp = await fetch('hoi4_clone.wasm?v=' + Date.now());
   const bytes = await resp.arrayBuffer();
   const result = await WebAssembly.instantiate(bytes, { env: {} });
   wasm = result.instance;
-  document.getElementById('loadStatus').textContent = '✓ WASM 引擎加载完成 (178KB)';
+  document.getElementById('loadStatus').textContent = '✓ WASM 引擎加载完成';
   document.getElementById('app').style.display = 'grid';
-  loadScript();
+  // 初始化: 建3个省 + 补给双方
+  loadScript(); // 建3省
+  supply('GER');
+  supply('FRA');
+  refresh();
 }
 
 function log(msg) {

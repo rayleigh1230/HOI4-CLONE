@@ -98,6 +98,87 @@ pub extern "C" fn engine_move_division(division_id: u32, target: u32) {
     });
 }
 
+/// 部署师到指定省(前端交互式部署)
+#[no_mangle]
+pub unsafe extern "C" fn engine_deploy_division(
+    owner_ptr: *const u8, owner_len: usize,
+    location: u32,
+    equip_ptr: *const u8, equip_len: usize,
+    battalions: u32,
+) {
+    let owner = unsafe { ptr_to_str(owner_ptr, owner_len) };
+    let equip = unsafe { ptr_to_str(equip_ptr, equip_len) };
+    ENGINE.with(|e| {
+        let mut e = e.borrow_mut();
+        let Engine { interp, world } = &mut *e;
+        let script = format!(
+            "create_division = {{ owner = {owner} location = {location} equipment = {equip} battalions = {battalions} }}"
+        );
+        if let Ok(b) = crate::parser::parse(&script) {
+            let effs = crate::ast::lower::lower_effects(&b);
+            interp.run(&effs, world);
+        }
+    });
+}
+
+/// 补充装备到国家仓库
+#[no_mangle]
+pub unsafe extern "C" fn engine_add_equipment(
+    owner_ptr: *const u8, owner_len: usize,
+    equip_ptr: *const u8, equip_len: usize,
+    amount: u32,
+) {
+    let owner = unsafe { ptr_to_str(owner_ptr, owner_len) };
+    let equip = unsafe { ptr_to_str(equip_ptr, equip_len) };
+    ENGINE.with(|e| {
+        let mut e = e.borrow_mut();
+        let Engine { interp, world } = &mut *e;
+        let script = format!("add_equipment = {{ owner = {owner} type = {equip} amount = {amount} }}");
+        if let Ok(b) = crate::parser::parse(&script) {
+            let effs = crate::ast::lower::lower_effects(&b);
+            interp.run(&effs, world);
+        }
+    });
+}
+
+/// 补充人力到国家池
+#[no_mangle]
+pub unsafe extern "C" fn engine_add_manpower(
+    owner_ptr: *const u8, owner_len: usize,
+    amount: u32,
+) {
+    let owner = unsafe { ptr_to_str(owner_ptr, owner_len) };
+    ENGINE.with(|e| {
+        let mut e = e.borrow_mut();
+        let Engine { interp, world } = &mut *e;
+        let script = format!("add_manpower = {{ owner = {owner} amount = {amount} }}");
+        if let Ok(b) = crate::parser::parse(&script) {
+            let effs = crate::ast::lower::lower_effects(&b);
+            interp.run(&effs, world);
+        }
+    });
+}
+
+/// 自动部署: 一键给某方补满装备+人力(部署时用)
+#[no_mangle]
+pub unsafe extern "C" fn engine_supply(owner_ptr: *const u8, owner_len: usize) {
+    let owner = unsafe { ptr_to_str(owner_ptr, owner_len) };
+    ENGINE.with(|e| {
+        let mut e = e.borrow_mut();
+        let Engine { interp, world } = &mut *e;
+        // 自动补足装备(各5000)和人力(50000), 简化部署
+        let script = format!(
+            "add_equipment = {{ owner = {owner} type = infantry_equipment amount = 5000 }}
+            add_equipment = {{ owner = {owner} type = medium_tank amount = 5000 }}
+            add_manpower = {{ owner = {owner} amount = 500000 }}"
+        );
+        if let Ok(b) = crate::parser::parse(&script) {
+            let effs = crate::ast::lower::lower_effects(&b);
+            interp.run(&effs, world);
+        }
+    });
+}
+
 /// 运行 setup 脚本(建师/开战等)。返回 0 成功, 非 0 失败
 #[no_mangle]
 pub unsafe extern "C" fn engine_run_setup(script_ptr: *const u8, script_len: usize) -> u32 {
