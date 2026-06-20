@@ -37,21 +37,15 @@ impl AtkStats {
     }
 }
 
-/// 对一组攻击者 vs 一组防御者结算 1 小时(对称: 攻→守 + 守→攻)
+/// 对一组攻击者 vs 一组防御者结算 1 小时(仅正向; 反击由 resolve_all_battles 对称处理)
 /// 守方为可变引用切片, 兼容 HashMap::get_mut 收集的 Vec<&mut Division>
 pub fn resolve_hour(attackers: &[Division], defenders: &mut [&mut Division]) {
     if attackers.is_empty() || defenders.is_empty() {
         return;
     }
-    // 正向: 攻方 → 守方(守方用 defense 池)
-    for atk in attackers {
-        let atk_stats = AtkStats::from(atk);
-        apply_side_to_side(&atk_stats, defenders, CombatPool::Defense);
-    }
-    // P0-2 反击: 守方 → 攻方(攻方用 breakthrough 池)。
-    // 攻方此时需可变借用; 但 attackers 是 &[Division](只读)。
-    // 解法: 把攻方伤害累积到独立结构, 调用方(resolve_all_battles)处理对称。
-    // 此函数内反击由 resolve_all_battles 通过交换攻守角色实现。
+    // 正向: 攻方 → 守方(守方用 defense 池; P1-5 所有攻击者共享消耗)
+    let atk_stats: Vec<AtkStats> = attackers.iter().map(AtkStats::from).collect();
+    apply_all_attackers(&atk_stats, defenders, CombatPool::Defense);
 }
 
 /// 哪一方的防御池: 守方用 defense, 攻方(被反击时)用 breakthrough
@@ -71,51 +65,61 @@ impl CombatPool {
     }
 }
 
-/// 单个攻击方对一组目标输出伤害(首要目标 35% + 所有目标均分 65%)
-fn apply_side_to_side(atk: &AtkStats, targets: &mut [&mut Division], pool: CombatPool) {
+/// 所有攻击方对一组目标输出伤害(P1-5: 防御池对所有攻击者共享消耗)
+/// 每个目标的 defense/breakthrough 池被所有攻击者的攻击累加消耗。
+fn apply_all_attackers(attackers: &[AtkStats], targets: &mut [&mut Division], pool: CombatPool) {
     let n = targets.len();
-    if n == 0 {
+    if n == 0 || attackers.is_empty() {
         return;
     }
-    // 用首个目标的硬度算总攻击点(M3 简化: 假设目标硬度一致)
     let target_hardness = targets[0].hardness;
-    let attacks = atk.soft_attack * (1.0 - target_hardness) + atk.hard_attack * target_hardness;
-    if attacks <= 0.0 {
-        return;
-    }
 
     for (i, tgt) in targets.iter_mut().enumerate() {
-        // P0-1: 首要目标 35% + 所有目标均分 65%(含首要)。
+        // P0-1: 每个攻击者对目标的分摊(首要35% + 均分65%)
         let base = (1.0 - DAMAGE_SPLIT_FIRST) / n as f64;
         let share = if i == 0 { DAMAGE_SPLIT_FIRST + base } else { base };
-        let attacks_on_this = attacks * share;
 
-        let armor_outclass = atk.armor > tgt.piercing;
-        let def_outclass = tgt.armor > atk.piercing;
-
-        let hits = compute_hits(attacks_on_this, pool.pool_value(tgt));
-
-        let mut org_dice = ORG_DICE_SIZE;
-        let mut str_dice = STR_DICE_SIZE;
-        if armor_outclass {
-            org_dice += ARMOR_ORG_BONUS_DICE;
-            str_dice += ARMOR_STR_BONUS_DICE;
+        // 聚合所有攻击者对本目标的攻击点
+        let mut total_attacks = 0.0f64;
+        // 每攻击者的贡献(用于按比例分摊命中, 保留各自装甲判定)
+        let mut per_atk: Vec<(f64, bool, bool)> = Vec::new(); // (attacks, armor_outclass, def_outclass)
+        for atk in attackers {
+            let atk_pts = atk.soft_attack * (1.0 - target_hardness) + atk.hard_attack * target_hardness;
+            let on_this = atk_pts * share;
+            if on_this <= 0.0 {
+                continue;
+            }
+            total_attacks += on_this;
+            per_atk.push((on_this, atk.armor > tgt.piercing, tgt.armor > atk.piercing));
         }
-        // P2-9: 装甲偏转同时作用于 org 和 str
-        let armor_deflect = if def_outclass { 0.5 } else { 1.0 };
+        if total_attacks <= 0.0 {
+            continue;
+        }
 
-        // P1-3: 1dN 期望 = (N+1)/2
-        let org_dmg = hits * ((org_dice + 1.0) / 2.0) * ORG_DMG_MOD * armor_deflect;
-        let str_dmg = hits * ((str_dice + 1.0) / 2.0) * STR_DMG_MOD * armor_deflect;
+        // P1-5: 用目标防御池一次判定总命中(所有攻击共享消耗)
+        let total_hits = compute_hits(total_attacks, pool.pool_value(tgt));
 
-        tgt.org = (tgt.org - org_dmg).max(0.0);
-        let hp_before = tgt.strength;
-        tgt.strength = (tgt.strength - str_dmg).max(0.0);
-        // M4a: HP 损失 → 装备损失(按 EQUIPMENT_COMBAT_LOSS_FACTOR=0.70)
-        let hp_loss = hp_before - tgt.strength;
-        if hp_loss > 0.0 {
-            let eq_loss = hp_loss * EQUIPMENT_LOSS_FACTOR;
-            consume_equipment(tgt, eq_loss);
+        // 按攻击点比例把命中分给各攻击者, 各自算伤害(含装甲碾压骰子)
+        for (atk_pts, armor_outclass, def_outclass) in per_atk {
+            let hits = total_hits * (atk_pts / total_attacks);
+            let mut org_dice = ORG_DICE_SIZE;
+            let mut str_dice = STR_DICE_SIZE;
+            if armor_outclass {
+                org_dice += ARMOR_ORG_BONUS_DICE;
+                str_dice += ARMOR_STR_BONUS_DICE;
+            }
+            let armor_deflect = if def_outclass { 0.5 } else { 1.0 };
+
+            let org_dmg = hits * ((org_dice + 1.0) / 2.0) * ORG_DMG_MOD * armor_deflect;
+            let str_dmg = hits * ((str_dice + 1.0) / 2.0) * STR_DMG_MOD * armor_deflect;
+
+            tgt.org = (tgt.org - org_dmg).max(0.0);
+            let hp_before = tgt.strength;
+            tgt.strength = (tgt.strength - str_dmg).max(0.0);
+            let hp_loss = hp_before - tgt.strength;
+            if hp_loss > 0.0 {
+                consume_equipment(tgt, hp_loss * EQUIPMENT_LOSS_FACTOR);
+            }
         }
     }
 }
@@ -167,19 +171,17 @@ pub fn resolve_all_battles(world: &mut World) {
             continue;
         }
 
-        // 正向: 攻 → 守(守用 defense 池)
+        // 正向: 攻 → 守(守用 defense 池; P1-5 所有攻击者共享消耗)
         {
+            let atk_stats: Vec<AtkStats> = atks.iter().map(AtkStats::from).collect();
             let mut def_refs: Vec<&mut Division> = defs.iter_mut().collect();
-            for atk in &atks {
-                apply_side_to_side(&AtkStats::from(atk), &mut def_refs, CombatPool::Defense);
-            }
+            apply_all_attackers(&atk_stats, &mut def_refs, CombatPool::Defense);
         }
         // 反向(反击): 守 → 攻(攻用 breakthrough 池)
         {
+            let def_stats: Vec<AtkStats> = defs.iter().map(AtkStats::from).collect();
             let mut atk_refs: Vec<&mut Division> = atks.iter_mut().collect();
-            for def in &defs {
-                apply_side_to_side(&AtkStats::from(def), &mut atk_refs, CombatPool::Breakthrough);
-            }
+            apply_all_attackers(&def_stats, &mut atk_refs, CombatPool::Breakthrough);
         }
 
         // 合并本场战斗结果到 final_state(存完整 Division 快照)
@@ -202,6 +204,52 @@ pub fn resolve_all_battles(world: &mut World) {
             d.strength = snap.strength;
             d.equipment_held = snap.equipment_held;
         }
+    }
+
+    // P2-14: 战斗生命周期 — 移除破阵师 + 结束战斗
+    cleanup_battles(world);
+}
+
+/// 移除破阵师, 结束一方全破的战斗
+fn cleanup_battles(world: &mut World) {
+    // 先收集每场战斗的攻守存活情况(避免遍历时修改)
+    let battle_specs: Vec<(usize, Vec<u64>, Vec<u64>)> = world
+        .battles
+        .iter()
+        .enumerate()
+        .map(|(i, b)| (i, b.attackers.clone(), b.defenders.clone()))
+        .collect();
+
+    // 对每场战斗: 过滤掉破阵师, 判定是否结束
+    let mut battles_to_remove: Vec<usize> = Vec::new();
+    let mut battle_updates: Vec<(usize, Vec<u64>, Vec<u64>)> = Vec::new();
+    for (idx, atk_ids, def_ids) in &battle_specs {
+        let atk_alive: Vec<u64> = atk_ids
+            .iter()
+            .filter(|id| world.divisions.get(id).map(|d| !d.is_broken()).unwrap_or(false))
+            .copied()
+            .collect();
+        let def_alive: Vec<u64> = def_ids
+            .iter()
+            .filter(|id| world.divisions.get(id).map(|d| !d.is_broken()).unwrap_or(false))
+            .copied()
+            .collect();
+        // 攻方或守方全破 → 战斗结束
+        if atk_alive.is_empty() || def_alive.is_empty() {
+            battles_to_remove.push(*idx);
+        } else if atk_alive.len() < atk_ids.len() || def_alive.len() < def_ids.len() {
+            battle_updates.push((*idx, atk_alive, def_alive));
+        }
+    }
+
+    // 应用更新(部分破阵的战斗保留存活师)
+    for (idx, atk, def) in battle_updates {
+        world.battles[idx].attackers = atk;
+        world.battles[idx].defenders = def;
+    }
+    // 移除结束的战斗(从后往前移, 避免索引错位)
+    for idx in battles_to_remove.into_iter().rev() {
+        world.battles.remove(idx);
     }
 }
 
@@ -276,6 +324,41 @@ mod tests {
         assert!(
             high_drop < low_drop,
             "高防御池应减少伤害: high_drop={high_drop} 应 < low_drop={low_drop}"
+        );
+    }
+
+    #[test]
+    fn t_p1_5_defense_pool_shared_among_attackers() {
+        // P1-5: 守方 defense 池对所有攻击者共享消耗, 不再无限
+        // 守方 defense=50。两个攻击者各 100 软攻击。
+        // 旧 bug: 每攻击者独立 100.min(50)=50 defended, 命中同单攻击者(defense 像无限)
+        // 修复: 总攻击 200, 池 50 一次性 → 50 defended(10%) + 150 undefended(40%)
+        //       命中 = 50×0.10 + 150×0.40 = 5 + 60 = 65
+        // 对比单攻击者 100 攻击 vs defense 50: 50×0.10 + 50×0.40 = 5+20 = 25
+        // 双攻击者命中(65) 应 > 单攻击者两倍(50)? 实际 65 > 50 ✓ 溢出更多
+        let mut def_double = inf("DEF");
+        def_double.defense = 50.0;
+        let org_before_double = def_double.org;
+
+        let atk1 = inf("ATK");
+        let atk2 = inf("ATK");
+        let mut defs_d = [&mut def_double];
+        // 两个攻击者同时打(聚合)
+        apply_all_attackers(&[AtkStats::from(&atk1), AtkStats::from(&atk2)], &mut defs_d, CombatPool::Defense);
+        let drop_double = org_before_double - def_double.org;
+
+        // 单攻击者对照
+        let mut def_single = inf("DEF");
+        def_single.defense = 50.0;
+        let org_before_single = def_single.org;
+        let mut defs_s = [&mut def_single];
+        apply_all_attackers(&[AtkStats::from(&atk1)], &mut defs_s, CombatPool::Defense);
+        let drop_single = org_before_single - def_single.org;
+
+        // 双攻击者伤害应显著大于单攻击者(因为防御池被打穿, 更多 40% 命中)
+        assert!(
+            drop_double > drop_single * 1.5,
+            "P1-5: 双攻击者应因防御池共享而造成更多伤害: double={drop_double} single={drop_single}"
         );
     }
 }
