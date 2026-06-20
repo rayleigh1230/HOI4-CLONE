@@ -113,13 +113,10 @@ pub unsafe extern "C" fn engine_run_setup(script_ptr: *const u8, script_len: usi
 pub extern "C" fn engine_tick(hours: u32) {
     ENGINE.with(|e| {
         let mut e = e.borrow_mut();
-        // 从 &mut Engine 拆字段: interp 只读, world 可变
         let Engine { interp, world } = &mut *e;
-        for _ in 0..hours {
-            world.hour += 1;
-            world.fire_event(interp, "on_hourly");
-            crate::combat::resolve::resolve_all_battles(world);
-        }
+        // 用 GameClock::tick 保证主循环完整(战斗/行军/恢复/增援 全调用)
+        // 之前内联版本漏了 advance_movement/recover_org, 导致浏览器撤退卡住
+        crate::runtime::GameClock::advance(interp, world, hours as u64);
     })
 }
 
