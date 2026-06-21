@@ -80,13 +80,25 @@ pub fn advance_movement(world: &mut World) {
         d.move_progress += rate;
         if d.move_progress >= 1.0 {
             if let Some(dest) = d.destination.take() {
-                d.location_province = dest;
                 d.move_progress = 0.0;
                 let was_attacking = d.attacking;
                 d.attacking = false;
-                arrivals.push(Arrival {
-                    id, dest, owner: d.owner_tag.clone(), was_attacking,
-                });
+                let owner = d.owner_tag.clone();
+                let dest_has_battle = world.battles.iter().any(|b| b.province == dest);
+                if dest_has_battle {
+                    // 目标省有战斗 → 师加入战斗(攻方), 但 location 不变(在门外)
+                    // 战斗结束后由战斗胜利占地逻辑处理归属
+                    let bidx = world.battles.iter().position(|b| b.province == dest).unwrap();
+                    if !world.battles[bidx].attackers.contains(&id) {
+                        world.battles[bidx].reserve_attackers.push(id);
+                    }
+                } else {
+                    // 无战斗 → 师进入, location 改为目标省
+                    d.location_province = dest;
+                    arrivals.push(Arrival {
+                        id, dest, owner, was_attacking,
+                    });
+                }
             }
         }
     }
