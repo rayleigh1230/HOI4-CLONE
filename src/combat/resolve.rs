@@ -375,6 +375,9 @@ fn cleanup_battles(world: &mut World) {
             continue;
         }
         // 守方撤退: 撤向邻接己方省(原逻辑)
+        // 关键改动: 撤退瞬间把 location 改成撤退目的地(而非保持原省)。
+        // 目的: 防止"撤退途中原省被友军夺回 → 到达敌方省变攻方 → 战败回 origin 瞬移"的 BUG。
+        // 撤退师自始至终 location 都是目的地, 后续判定都基于该地(空降语义)。
         let (loc, owner) = match world.divisions.get(&id) {
             Some(d) => (d.location_province, d.owner_tag.clone()),
             None => continue,
@@ -383,6 +386,7 @@ fn cleanup_battles(world: &mut World) {
             Some(dest) => {
                 if let Some(d) = world.divisions.get_mut(&id) {
                     d.retreating = true;
+                    d.location_province = dest; // 撤退瞬间归属地变目的地
                     d.destination = Some(dest);
                     d.move_progress = 0.0;
                 }
@@ -696,9 +700,117 @@ mod tests {
         resolve_all_battles(&mut w);
 
         let div = w.divisions.get(&d_id).expect("D 应存活");
-        // 守方撤退: 仍 location=2, destination=3(撤向邻省), retreating=true
-        assert_eq!(div.location_province, 2, "守方撤退不改 location(行军中)");
+        // 守方撤退: location 变撤退目的地省3(撤退瞬间归属地变更), destination=省3, retreating=true
+        assert_eq!(div.location_province, 3, "守方撤退 location 变目的地省3");
         assert_eq!(div.destination, Some(3), "守方撤向邻省3");
         assert!(div.retreating, "守方撤退标 retreating");
+    }
+
+    // ===== 撤退瞬间归属地变更(防瞬移 BUG) =====
+    // 战败撤退时, 守方 location 立刻改成撤退目的地(而非保持原省)。
+    // 目的: 防止"撤退途中原省被友军夺回 → 到达敌方省变攻方 → 战败回 origin 瞬移"的 BUG。
+    // 撤退师自始至终的 location 都是撤退目的地, 后续判定都基于该地。
+
+    /// 守方 D(origin=location=2)战败撤退到省3 → location 应立刻变 3(非保持2)。
+    #[test]
+    fn t_retreat_changes_location_to_destination() {
+        let mut w = World::new();
+        // D: FRA 守省2, origin=2(没移动过), 被打退
+        let mut d = inf("DEF");
+        d.owner_tag = "FRA".into();
+        d.location_province = 2;
+        d.origin_province = 2;
+        d.org = 0.0;
+        d.strength = 10.0;
+        let d_id = w.add_division(d);
+        // 攻方 A: GER, soft_attack=0(不打 D, 让 D 保持 org=0 触发撤退分类)
+        let mut a = inf("ATK");
+        a.owner_tag = "GER".into();
+        a.location_province = 1;
+        a.origin_province = 1;
+        a.soft_attack = 0.0;
+        a.hard_attack = 0.0;
+        let _a_id = w.add_division(a);
+        // 战斗: 省2, A 攻 D 守
+        w.battles.push(Battle {
+            id: 0, province: 2,
+            attackers: vec![_a_id], defenders: vec![d_id],
+            ..Default::default()
+        });
+        // 省份: 省2=FRA, 省3=FRA(邻接, 撤退目标)
+        w.provinces.insert(2, crate::runtime::Province {
+            id: 2, owner: "FRA".into(), controller: "FRA".into(),
+            terrain: "plains".into(), neighbors: vec![3],
+        });
+        w.provinces.insert(3, crate::runtime::Province {
+            id: 3, owner: "FRA".into(), controller: "FRA".into(),
+            terrain: "plains".into(), neighbors: vec![2],
+        });
+
+        resolve_all_battles(&mut w);
+
+        let div = w.divisions.get(&d_id).expect("D 应存活");
+        // 核心断言: 撤退瞬间 location 改成目的地省3
+        assert_eq!(
+            div.location_province, 3,
+            "战败撤退时 location 应立刻变撤退目的地省3(当前={})",
+            div.location_province
+        );
+        assert_eq!(div.destination, Some(3), "destination 仍指向省3(行军中)");
+        assert!(div.retreating, "应标 retreating");
+        assert!(div.move_progress < 1e-9, "撤退从进度0开始");
+    }
+
+    /// 撤退瞬间改 location 后, 若原省被友军夺回也不会影响该师(防瞬移 BUG 验证)。
+    /// 构造: D 撤退后, 模拟原省2归属变 GER, 验证 D 的 location 仍是省3(撤退目的地),
+    /// 不会因为原省归属变化而被拉回。
+    #[test]
+    fn t_retreat_location_independent_of_origin_after_retreat() {
+        let mut w = World::new();
+        let mut d = inf("DEF");
+        d.owner_tag = "FRA".into();
+        d.location_province = 2;
+        d.origin_province = 2;
+        d.org = 0.0;
+        d.strength = 10.0;
+        let d_id = w.add_division(d);
+        let mut a = inf("ATK");
+        a.owner_tag = "GER".into();
+        a.location_province = 1;
+        a.origin_province = 1;
+        a.soft_attack = 0.0;
+        a.hard_attack = 0.0;
+        let _a_id = w.add_division(a);
+        w.battles.push(Battle {
+            id: 0, province: 2,
+            attackers: vec![_a_id], defenders: vec![d_id],
+            ..Default::default()
+        });
+        w.provinces.insert(2, crate::runtime::Province {
+            id: 2, owner: "FRA".into(), controller: "FRA".into(),
+            terrain: "plains".into(), neighbors: vec![3],
+        });
+        w.provinces.insert(3, crate::runtime::Province {
+            id: 3, owner: "FRA".into(), controller: "FRA".into(),
+            terrain: "plains".into(), neighbors: vec![2],
+        });
+
+        // 第1步: D 战败撤退 → location 变省3
+        resolve_all_battles(&mut w);
+        assert_eq!(w.divisions.get(&d_id).unwrap().location_province, 3, "撤退后 location=省3");
+
+        // 第2步: 模拟原省2被友军(GER)夺回(归属变化)
+        w.provinces.get_mut(&2).unwrap().controller = "GER".into();
+        w.provinces.get_mut(&2).unwrap().owner = "GER".into();
+
+        // 第3步: 再跑一次主循环相关阶段, D 的 location 不应变(不会瞬移回 origin)
+        // 用 check_engagements + resolve 验证 D 不被拉回省2
+        crate::combat::movement::check_engagements(&mut w);
+        let d_after = w.divisions.get(&d_id).unwrap();
+        assert_eq!(
+            d_after.location_province, 3,
+            "原省归属变化后, 撤退师 location 应仍=省3(防瞬移 BUG), 实际={}",
+            d_after.location_province
+        );
     }
 }
