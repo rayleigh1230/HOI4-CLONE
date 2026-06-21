@@ -65,8 +65,9 @@ pub fn advance_movement(world: &mut World) {
         .filter_map(|(id, d)| d.destination.map(|_| *id))
         .collect();
 
-    // 第一阶段: 推进进度, 收集到达的师(释放借用)
-    struct Arrival { id: u64, dest: u32, owner: String, was_attacking: bool }
+    // 第一阶段: 推进进度
+    // 进度满时: 无战斗→直接到达(改location+占领); 有战斗→pending_arrival(等战斗胜)
+    struct Arrival { id: u64, dest: u32, owner: String }
     let mut arrivals: Vec<Arrival> = Vec::new();
     for id in moving {
         let Some(d) = world.divisions.get_mut(&id) else { continue };
@@ -81,35 +82,22 @@ pub fn advance_movement(world: &mut World) {
         if d.move_progress >= 1.0 {
             if let Some(dest) = d.destination.take() {
                 d.move_progress = 0.0;
-                let was_attacking = d.attacking;
                 d.attacking = false;
                 let owner = d.owner_tag.clone();
                 let dest_has_battle = world.battles.iter().any(|b| b.province == dest);
                 if dest_has_battle {
-                    // 目标省有战斗 → 师加入战斗(攻方), 但 location 不变(在门外)
-                    // 战斗结束后由战斗胜利占地逻辑处理归属
-                    let bidx = world.battles.iter().position(|b| b.province == dest).unwrap();
-                    if !world.battles[bidx].attackers.contains(&id) {
-                        world.battles[bidx].reserve_attackers.push(id);
-                    }
+                    // 进度满但战斗未胜 → pending_arrival(过程, 不改归属)
+                    d.pending_arrival = Some(dest);
                 } else {
-                    // 无战斗 → 师进入, location 改为目标省
+                    // 进度满且无战斗 → 到达(结算归属)
                     d.location_province = dest;
-                    arrivals.push(Arrival {
-                        id, dest, owner, was_attacking,
-                    });
+                    arrivals.push(Arrival { id, dest, owner });
                 }
             }
         }
     }
-    // 第二阶段: 到达后占领(规则2: 战斗中不占领; 无战斗+无敌军+非己方→占领)
+    // 第二阶段: 结算到达(占领非己方地块)
     for a in arrivals {
-        // 规则2: 该省有战斗进行中 → 不占领(战斗结果决定归属)
-        let has_battle = world.battles.iter().any(|b| b.province == a.dest);
-        if has_battle {
-            continue;
-        }
-        // 无战斗 + 非己方 → 占领
         let is_own = world.provinces.get(&a.dest)
             .map(|p| p.controller == a.owner)
             .unwrap_or(false);
@@ -120,6 +108,33 @@ pub fn advance_movement(world: &mut World) {
             }
             if let Some(d) = world.divisions.get_mut(&a.id) {
                 d.org = (d.org - d.max_org * ORG_LOSS_ON_CONQUER).max(0.0);
+            }
+        }
+    }
+    // 第三阶段: 检查 pending_arrival 的师(进度满+等战斗胜)
+    // 如果目标省已无战斗(己方胜/敌方撤) → 真正到达(改location+占领)
+    let pending: Vec<u64> = world.divisions.iter()
+        .filter_map(|(id, d)| d.pending_arrival.map(|_| *id))
+        .collect();
+    for id in pending {
+        let Some(d) = world.divisions.get_mut(&id) else { continue };
+        if let Some(dest) = d.pending_arrival {
+            let dest_has_battle = world.battles.iter().any(|b| b.province == dest);
+            if !dest_has_battle {
+                // 战斗结束了 → 到达结算
+                d.pending_arrival = None;
+                d.location_province = dest;
+                let owner = d.owner_tag.clone();
+                let is_own = world.provinces.get(&dest)
+                    .map(|p| p.controller == owner)
+                    .unwrap_or(false);
+                if !is_own {
+                    if let Some(p) = world.provinces.get_mut(&dest) {
+                        p.controller = owner.clone();
+                        p.owner = owner;
+                    }
+                    d.org = (d.org - d.max_org * ORG_LOSS_ON_CONQUER).max(0.0);
+                }
             }
         }
     }

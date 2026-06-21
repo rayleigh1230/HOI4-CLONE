@@ -123,6 +123,7 @@ pub fn register(reg: &mut Registry) {
             move_progress: 0.0,
             attacking: false,
             origin_province: loc,
+            pending_arrival: None,
         };
         w.add_division(d);
         Ok(())

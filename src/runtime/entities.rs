@@ -54,6 +54,8 @@ pub struct Division {
     pub attacking: bool,
     /// 出发地(行军开始时的省份, 同出发地判定预备队用; 到达后保持)
     pub origin_province: u32,
+    /// 待到达: 进度满但战斗未胜, 等战斗胜利后才结算归属
+    pub pending_arrival: Option<u32>,
 }
 
 impl Division {
