@@ -98,6 +98,21 @@ pub extern "C" fn engine_move_division(division_id: u32, target: u32) {
     });
 }
 
+/// 命令师支援攻击目标省(师不移动, 作为攻方远程参战)
+/// 目标省须已有战斗, 否则命令无效(静默取消)
+#[no_mangle]
+pub extern "C" fn engine_support_attack(division_id: u32, target: u32) {
+    ENGINE.with(|e| {
+        let mut e = e.borrow_mut();
+        let Engine { interp, world } = &mut *e;
+        let script = format!("support_attack = {{ division = {division_id} target = {target} }}");
+        if let Ok(b) = crate::parser::parse(&script) {
+            let effs = crate::ast::lower::lower_effects(&b);
+            interp.run(&effs, world);
+        }
+    });
+}
+
 /// 部署师到指定省(前端交互式部署)
 #[no_mangle]
 pub unsafe extern "C" fn engine_deploy_division(
@@ -248,13 +263,14 @@ fn serialize_state(world: &World) -> String {
         }
         first = false;
         s.push_str(&format!(
-            "{{\"id\":{},\"owner\":\"{}\",\"org\":{:.1},\"max_org\":{:.0},\"str\":{:.1},\"max_str\":{:.0},\"eq_ratio\":{:.2},\"mp_ratio\":{:.2},\"loc\":{},\"dest\":{},\"pending\":{},\"progress\":{:.3},\"attacking\":{},\"retreating\":{},\"annihilated\":{}}}",
+            "{{\"id\":{},\"owner\":\"{}\",\"org\":{:.1},\"max_org\":{:.0},\"str\":{:.1},\"max_str\":{:.0},\"eq_ratio\":{:.2},\"mp_ratio\":{:.2},\"loc\":{},\"dest\":{},\"pending\":{},\"progress\":{:.3},\"supporting\":{},\"attacking\":{},\"retreating\":{},\"annihilated\":{}}}",
             d.id, d.owner_tag, d.org, d.max_org, d.strength, d.max_strength,
             d.equipment_ratio_only(), d.manpower_ratio(),
             d.location_province,
             d.destination.unwrap_or(0),
             d.pending_arrival.unwrap_or(0),
             d.move_progress,
+            d.supporting.unwrap_or(0),
             d.attacking, d.retreating, d.is_annihilated()
         ));
     }

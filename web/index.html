@@ -73,6 +73,11 @@
   .battle-info { font-size: 12px; color: #aaa; margin-top: 8px; }
   #log { height: 100px; overflow-y: auto; background: #0a0a1a; border: 1px solid #0f3460; border-radius: 4px; padding: 6px; font-family: monospace; font-size: 11px; color: #7ec8e3; margin-top: 10px; }
   .loading { color: #e94560; text-align: center; padding: 40px; font-size: 16px; }
+  /* 下令菜单(选中师后点省弹出: 进军/支援/取消) */
+  #orderMenu { position: absolute; display: none; z-index: 100; background: #16213e; border: 1px solid #e94560; border-radius: 6px; padding: 4px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); min-width: 120px; }
+  #orderMenu button { display: block; width: 100%; text-align: left; background: transparent; color: #e0e0e0; border: none; padding: 10px 14px; border-radius: 4px; cursor: pointer; font-size: 13px; margin: 2px 0; min-height: 40px; }
+  #orderMenu button:hover { background: #0f3460; }
+  #orderMenu button.cancel { color: #888; }
 </style>
 </head>
 <body>
@@ -130,16 +135,24 @@ create_province = { id = 3 owner = FRA neighbors = { 1 } }</textarea>
   <div class="panel">
     <h2>🗺️ 战场</h2>
     <canvas id="mapCanvas"></canvas>
-    <div class="map-hint">💡 点地块查看部队 | 选师后点目标省移动/进攻 | 双击地块切换控制权</div>
+    <div class="map-hint">💡 点师选中 → 点目标省选命令(进军⚔️/支援🎯) | 点地块查看部队 | 双击地块切换控制权</div>
     <div class="battle-info" id="battleInfo"></div>
     <div class="prov-header" id="provHeader"></div>
     <div class="divisions" id="divisions"></div>
   </div>
 </div>
 
+<!-- 下令菜单(选中师后点省弹出) -->
+<div id="orderMenu">
+  <button data-order="attack">⚔️ 进军攻击</button>
+  <button data-order="support">🎯 支援攻击</button>
+  <button data-order="cancel" class="cancel">✖️ 取消</button>
+</div>
+
 <script>
 let wasm = null;
 let autoTimer = null;
+let pendingOrder = null; // 待下达的命令 { divId, targetProv }
 
 // WASM 内存读取: 把 Rust 返回的 null-terminated C 字符串读成 JS string
 function readCString(ptr) {
@@ -347,7 +360,7 @@ function refresh() {
     if (d.id === selectedDivId) card.style.outline = '2px solid #ffd700';
     card.onclick = () => {
       selectedDivId = (selectedDivId === d.id) ? null : d.id;
-      log(selectedDivId ? `选中师#${d.id}, 点目标省下移动令` : '取消选中');
+      log(selectedDivId ? `选中师#${d.id}, 点目标省选命令(进军/支援)` : '取消选中');
       refresh();
     };
     card.className = 'div-card ' + (d.owner === 'GER' ? 'attacker' : 'defender') + (d.annihilated || d.retreating ? ' broken' : '');
@@ -498,6 +511,22 @@ function drawMap() {
     if (d.pending && pos[d.pending]) {
       drawProgressArrow(d.pending, 1.0, '#e94560', true);
     }
+    // 支援攻击: 蓝色虚线箭头(师不移动, 无进度填充)
+    if (d.supporting && pos[d.supporting]) {
+      const tx = pos[d.supporting].x, ty = pos[d.supporting].y;
+      ctx.strokeStyle = '#3a86ff';
+      ctx.lineWidth = 2; ctx.setLineDash([6, 3]);
+      ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(tx, ty); ctx.stroke();
+      ctx.setLineDash([]);
+      // 箭头头(目标端)
+      const ang = Math.atan2(ty - by, tx - bx);
+      ctx.fillStyle = '#3a86ff';
+      ctx.beginPath();
+      ctx.moveTo(tx, ty);
+      ctx.lineTo(tx - 8 * Math.cos(ang - 0.4), ty - 8 * Math.sin(ang - 0.4));
+      ctx.lineTo(tx - 8 * Math.cos(ang + 0.4), ty - 8 * Math.sin(ang + 0.4));
+      ctx.closePath(); ctx.fill();
+    }
     const color = TAG_COLORS[d.owner] || '#fff';
     ctx.fillStyle = d.annihilated ? '#444' : color;
     ctx.fillRect(bx - 6, by - 6, 12, 12);
@@ -509,28 +538,68 @@ function drawMap() {
   });
 }
 
-// 点击地块: 选中师→移动; 否则→选中地块(显示部队)
+// 点击地块: 选中师→弹命令菜单(进军/支援); 否则→选中地块(显示部队)
+const orderMenu = document.getElementById('orderMenu');
+
+function showOrderMenu(divId, targetProv, x, y) {
+  pendingOrder = { divId, targetProv };
+  // 定位菜单(相对 viewport, 避免超出右边/下边)
+  const menuW = 140, menuH = 140;
+  const vx = Math.min(x, window.innerWidth - menuW - 8);
+  const vy = Math.min(y, window.innerHeight - menuH - 8);
+  orderMenu.style.left = vx + 'px';
+  orderMenu.style.top = vy + 'px';
+  orderMenu.style.display = 'block';
+}
+
+function hideOrderMenu() {
+  orderMenu.style.display = 'none';
+  pendingOrder = null;
+}
+
+// 菜单项点击: 执行对应命令
+orderMenu.addEventListener('click', (e) => {
+  const btn = e.target.closest('button');
+  if (!btn || !pendingOrder) return;
+  const { divId, targetProv } = pendingOrder;
+  const order = btn.dataset.order;
+  hideOrderMenu();
+  if (order === 'cancel') return;
+  try {
+    if (order === 'attack') {
+      wasm.exports.engine_move_division(divId, targetProv);
+      log(`师#${divId} 进军→省${targetProv}`);
+    } else if (order === 'support') {
+      wasm.exports.engine_support_attack(divId, targetProv);
+      log(`师#${divId} 支援→省${targetProv}`);
+    }
+  } catch (err) {
+    log('⚠️ 下令失败: ' + err.message);
+  }
+  selectedDivId = null;
+  refresh();
+});
+
 document.addEventListener('click', (e) => {
   if (!canvas || !ctx) return;
+  // 点菜单外(非菜单本身)→ 关闭菜单
+  if (orderMenu.style.display === 'block' && !orderMenu.contains(e.target)) {
+    hideOrderMenu();
+  }
   if (e.target.id !== 'mapCanvas') return;
   const rect = canvas.getBoundingClientRect();
   const x = e.clientX - rect.left, y = e.clientY - rect.top;
+  // 命中检测用 viewport 坐标(菜单是 absolute 定位)
+  const vx = e.clientX, vy = e.clientY;
   const state = getState();
   const ids = state.provinces.map(p => p.id);
   const W = canvas.clientWidth, H = canvas.clientHeight;
   for (const p of state.provinces) {
     const pos = provincePos(p.id, ids, W, H);
     if (Math.hypot(pos.x - x, pos.y - y) < 26) {
-      // 选中了师 → 下移动令
+      // 选中了师 → 弹命令菜单(进军/支援)
       if (selectedDivId) {
-        try {
-          wasm.exports.engine_move_division(selectedDivId, p.id);
-          log(`师#${selectedDivId} → 省${p.id}`);
-        } catch (err) {
-          log('⚠️ 移动失败: ' + err.message);
-        }
-        selectedDivId = null;
-        refresh();
+        showOrderMenu(selectedDivId, p.id, vx, vy);
         return;
       }
       // 没选师 → 选中地块(显示该地块部队)

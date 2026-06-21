@@ -56,6 +56,9 @@ pub struct Division {
     pub origin_province: u32,
     /// 待到达: 进度满但战斗未胜, 等战斗胜利后才结算归属
     pub pending_arrival: Option<u32>,
+    /// 支援攻击目标省(有值 = 正在支援攻击该省)。师不移动, 作为攻方远程参战。
+    /// 下令时目标省须已有战斗, 否则指令无效。战斗结束/战败时自动清除。
+    pub supporting: Option<u32>,
 }
 
 impl Division {

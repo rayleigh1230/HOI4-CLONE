@@ -68,6 +68,22 @@ pub fn check_engagements(world: &mut World) {
     }
 }
 
+/// 清理支援攻击: 若支援目标省的战斗已结束(不在 world.battles) → 清 supporting。
+/// 对应规则7"如果没战斗支援攻击就自动取消"。
+/// 放在 check_engagements 之后、resolve 之前, 让战斗已结束的支援师在本 tick
+/// resolve 时不再被当攻方(避免它已被移出 battle 但 supporting 还在的瞬态)。
+pub fn cancel_finished_supports(world: &mut World) {
+    let active_provinces: std::collections::HashSet<u32> = world.battles.iter()
+        .map(|b| b.province).collect();
+    for d in world.divisions.values_mut() {
+        if let Some(t) = d.supporting {
+            if !active_provinces.contains(&t) {
+                d.supporting = None;
+            }
+        }
+    }
+}
+
 /// 推进所有正在移动的师(每小时调用)
 pub fn advance_movement(world: &mut World) {
     let moving: Vec<u64> = world

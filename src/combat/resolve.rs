@@ -371,6 +371,7 @@ fn cleanup_battles(world: &mut World) {
                 d.attacking = false;
                 d.retreating = false; // 已回到 origin, 不需行军撤退
                 d.pending_arrival = None;
+                d.supporting = None; // 支援攻方撤退 → 清支援标记
             }
             continue;
         }

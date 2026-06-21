@@ -15,6 +15,51 @@ fn num_of(a: &Arg) -> Result<f64, CmdError> {
     a.as_num().ok_or_else(|| CmdError::RuntimeError(format!("期望数字, 得 {:?}", a)))
 }
 
+/// 把师作为攻方加入目标省的战斗(move_division 和 support_attack 共用)。
+/// - 若目标省已有战斗: 按同 origin / 宽度判定进前线或预备队
+/// - 若目标省无战斗: 用 enemies 新建战斗(守方按宽度分配前线/预备队)
+///   (support_attack 调用时 enemies 为空, 因下单时已确保有战斗, 不会走新建分支)
+fn join_as_attacker(world: &mut crate::runtime::World, div_id: u64, target: u32, enemies: &[u64]) {
+    let from_prov = world.divisions.get(&div_id).map(|d| d.location_province).unwrap_or(0);
+    let div_width = world.divisions.get(&div_id).map(|d| d.combat_width).unwrap_or(0.0);
+    let existing_idx = world.battles.iter().position(|b| b.province == target);
+    if let Some(bidx) = existing_idx {
+        // 加入已有战斗: 判定进前线还是预备队
+        // 规则: 同出发地(from_prov)已有师在攻该目标 → 后到的进预备队(时间线落后)
+        //       不同出发地 → 直接前线(新方向); 再检查宽度: 超宽也进预备队
+        let same_origin_exists = world.battles[bidx].attackers.iter()
+            .chain(world.battles[bidx].reserve_attackers.iter())
+            .any(|aid| world.divisions.get(aid)
+                .map(|d| d.origin_province == from_prov)
+                .unwrap_or(false));
+        let over_width = !crate::combat::width::can_join_frontline(world, &world.battles[bidx].attackers, div_width);
+        if same_origin_exists || over_width {
+            world.battles[bidx].reserve_attackers.push(div_id);
+        } else {
+            world.battles[bidx].attackers.push(div_id);
+        }
+    } else {
+        // 新建战斗: 守方按宽度分配(守方无出发地概念, 用宽度)
+        let mut frontline_d = Vec::new();
+        let mut reserve_d = Vec::new();
+        for eid in enemies {
+            let w_div = world.divisions.get(eid).map(|d| d.combat_width).unwrap_or(0.0);
+            if crate::combat::width::can_join_frontline(world, &frontline_d, w_div) {
+                frontline_d.push(*eid);
+            } else {
+                reserve_d.push(*eid);
+            }
+        }
+        let battle_id = world.next_battle_id;
+        world.next_battle_id += 1;
+        world.battles.push(Battle {
+            id: battle_id, province: target,
+            attackers: vec![div_id], defenders: frontline_d,
+            reserve_attackers: vec![], reserve_defenders: reserve_d,
+        });
+    }
+}
+
 pub fn register(reg: &mut Registry) {
     // 创建省份(行军基础设施: owner/controller/neighbors)
     reg.register("create_province", |w, p| {
@@ -124,6 +169,7 @@ pub fn register(reg: &mut Registry) {
             attacking: false,
             origin_province: loc,
             pending_arrival: None,
+            supporting: None,
         };
         w.add_division(d);
         Ok(())
@@ -204,7 +250,7 @@ pub fn register(reg: &mut Registry) {
         let owner = w.divisions.get(&div_id)
             .ok_or_else(|| CmdError::RuntimeError(format!("move_division: 师 {div_id} 不存在")))?
             .owner_tag.clone();
-        // 查目标省有无敌军(非己方的师; 排除撤退师 — 撤退师不当守方被重新拉入战斗)
+        // 查目标省有无敌军(非己方的师; 排除撤退师 — 撤退师不当守方被重新拉入)
         let enemies: Vec<u64> = w.divisions.values()
             .filter(|d| d.location_province == target && d.owner_tag != owner && !d.retreating)
             .map(|d| d.id)
@@ -222,48 +268,34 @@ pub fn register(reg: &mut Registry) {
                 d.retreating = false; // 进军取消恢复; 己方行军保留恢复
             }
         }
-        // 有敌军防守 → 开战: 若目标省已有战斗则加入, 否则新建
+        // 有敌军防守 → 开战: 加入或新建战斗(复用 join_as_attacker)
         if !enemies.is_empty() {
-            let from_prov = w.divisions.get(&div_id).map(|d| d.location_province).unwrap_or(0);
-            let div_width = w.divisions.get(&div_id).map(|d| d.combat_width).unwrap_or(0.0);
-            let existing_idx = w.battles.iter().position(|b| b.province == target);
-            if let Some(bidx) = existing_idx {
-                // 加入已有战斗: 判定进前线还是预备队
-                // 规则: 同出发地(from_prov)已有师在攻该目标 → 后到的进预备队(时间线落后)
-                //       不同出发地 → 直接前线(新方向)
-                //       再检查宽度: 超宽也进预备队
-                let same_origin_exists = w.battles[bidx].attackers.iter()
-                    .chain(w.battles[bidx].reserve_attackers.iter())
-                    .any(|aid| w.divisions.get(aid)
-                        .map(|d| d.origin_province == from_prov)
-                        .unwrap_or(false));
-                let over_width = !crate::combat::width::can_join_frontline(w, &w.battles[bidx].attackers, div_width);
-                if same_origin_exists || over_width {
-                    w.battles[bidx].reserve_attackers.push(div_id);
-                } else {
-                    w.battles[bidx].attackers.push(div_id);
-                }
-            } else {
-                // 新建战斗: 守方按宽度分配(守方无出发地概念, 用宽度)
-                let mut frontline_d = Vec::new();
-                let mut reserve_d = Vec::new();
-                for eid in &enemies {
-                    let w_div = w.divisions.get(eid).map(|d| d.combat_width).unwrap_or(0.0);
-                    if crate::combat::width::can_join_frontline(w, &frontline_d, w_div) {
-                        frontline_d.push(*eid);
-                    } else {
-                        reserve_d.push(*eid);
-                    }
-                }
-                let battle_id = w.next_battle_id;
-                w.next_battle_id += 1;
-                w.battles.push(Battle {
-                    id: battle_id, province: target,
-                    attackers: vec![div_id], defenders: frontline_d,
-                    reserve_attackers: vec![], reserve_defenders: reserve_d,
-                });
-            }
+            join_as_attacker(w, div_id, target, &enemies);
         }
+        Ok(())
+    });
+
+    // 支援攻击: 师不移动, 作为攻方远程参与目标省战斗。
+    // 规则: 下令时目标省须已有战斗, 否则指令无效(静默取消, 不设 supporting)。
+    // 其他判定(加入战斗/伤害/宽度)与移动攻击一致。
+    reg.register("support_attack", |w, p| {
+        let div_id = num_of(np(p, "support_attack", "division")?)? as u64;
+        let target = num_of(np(p, "support_attack", "target")?)? as u32;
+        // 检查目标省是否已有战斗(下单时判定; 无战斗 → 指令无效)
+        let has_battle = w.battles.iter().any(|b| b.province == target);
+        if !has_battle {
+            // 静默取消: 不报错, 不设 supporting(蓝色箭头不出现)
+            return Ok(());
+        }
+        // 取该战斗的守方(已在前线的敌军), 用于 join_as_attacker 的 enemies 参数
+        // (join_as_attacker 在已有战斗时只走"加入"分支, enemies 仅用于新建分支, 传空即可)
+        let enemies: Vec<u64> = Vec::new();
+        // 设支援状态(师不移动: 不改 location/destination/move_progress/attacking)
+        if let Some(d) = w.divisions.get_mut(&div_id) {
+            d.supporting = Some(target);
+        }
+        // 加入已有战斗(同 origin / 宽度判定, 复用 move_division 逻辑)
+        join_as_attacker(w, div_id, target, &enemies);
         Ok(())
     });
 
