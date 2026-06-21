@@ -122,6 +122,7 @@ pub fn register(reg: &mut Registry) {
             destination: None,
             move_progress: 0.0,
             attacking: false,
+            origin_province: loc,
         };
         w.add_division(d);
         Ok(())
@@ -212,6 +213,7 @@ pub fn register(reg: &mut Registry) {
         let is_hostile = target_controller != owner;
         // 设移动状态
         if let Some(d) = w.divisions.get_mut(&div_id) {
+            d.origin_province = d.location_province; // 记录出发地
             d.destination = Some(target);
             d.move_progress = 0.0;
             d.attacking = is_hostile; // 进军(敌方地块)=红
@@ -229,7 +231,7 @@ pub fn register(reg: &mut Registry) {
                 let same_origin_exists = w.battles[bidx].attackers.iter()
                     .chain(w.battles[bidx].reserve_attackers.iter())
                     .any(|aid| w.divisions.get(aid)
-                        .map(|d| d.location_province == from_prov)
+                        .map(|d| d.origin_province == from_prov)
                         .unwrap_or(false));
                 let over_width = !crate::combat::width::can_join_frontline(w, &w.battles[bidx].attackers, div_width);
                 if same_origin_exists || over_width {
