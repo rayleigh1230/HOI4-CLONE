@@ -1228,43 +1228,157 @@ fn stop_ignored_for_retreating() {
 fn stop_keeps_passive_defense() {
     // 师同时进军(主动) + 被动防守(location 被攻):
     // 停止只取消进军, 保留防守(留在 defenders 里)
+    // 构造: A 在省10(己方GER, 非战斗地块), 进军省2(空敌方, 主动);
+    //       同时省10被FRA攻 → A 是省10防守方(被动)
+    // 注: A 在省10下进军省2(非战斗地块→非己方), 不触发撤退分支, 是纯主动进军
+    let mut reg = Registry::new();
+    register_all(&mut reg);
+    let interp = Interpreter::new(reg);
+    let mut world = World::new();
+    world.player_tag = "GER".into();
+    world.countries.insert("GER".into(), Default::default());
+    world.countries.insert("FRA".into(), Default::default());
+    // 省10(GER) 邻接省1(FRA)和省2(FRA空); 省1(FRA)也邻接省10
+    world.provinces.insert(10, hoi4_clone::runtime::Province {
+        id: 10, owner: "GER".into(), controller: "GER".into(),
+        terrain: "plains".into(), neighbors: vec![1, 2],
+    });
+    world.provinces.insert(1, hoi4_clone::runtime::Province {
+        id: 1, owner: "FRA".into(), controller: "FRA".into(),
+        terrain: "plains".into(), neighbors: vec![10],
+    });
+    world.provinces.insert(2, hoi4_clone::runtime::Province {
+        id: 2, owner: "FRA".into(), controller: "FRA".into(),
+        terrain: "plains".into(), neighbors: vec![10],
+    });
+    run_setup(&mut world, &interp, r#"
+        _setup = {
+            create_division = { owner = GER location = 10 soft_attack = 30 defense = 40 max_org = 60 }
+            create_division = { owner = FRA location = 1 soft_attack = 30 defense = 40 max_org = 60 }
+        }
+    "#);
+    let a_id = world.divisions.values()
+        .filter(|d| d.owner_tag == "GER").map(|d| d.id).next().unwrap();
+    let fra_id = world.divisions.values()
+        .filter(|d| d.owner_tag == "FRA").map(|d| d.id).next().unwrap();
+    // FRA 进攻省10 → A 成省10防守方(被动)
+    run_cmd(&mut world, &interp, &format!("move_division = {{ division = {} target = 10 }}", fra_id));
+    let battle10 = world.battles.iter().find(|b| b.province == 10).unwrap();
+    assert!(battle10.defenders.contains(&a_id), "A 应是省10守方(被动)");
+
+    // A 下令进军省2(敌方空省, 主动进攻) — A 在省10(战斗地块)移到省2(非己方)
+    // → 不触发撤退分支(目标非己方), 走进攻逻辑
+    run_cmd(&mut world, &interp, &format!("move_division = {{ division = {} target = 2 }}", a_id));
+    assert!(world.divisions.get(&a_id).unwrap().destination.is_some(), "A 应有进军令");
+    assert!(!world.divisions.get(&a_id).unwrap().retreating, "进军敌方省不应是撤退");
+
+    // 停止 A: 取消进军省2, 但保留防守省10
+    run_cmd(&mut world, &interp, &format!("stop_order = {{ division = {} }}", a_id));
+    let d = world.divisions.get(&a_id).unwrap();
+    assert!(d.destination.is_none(), "停止后 A 进军令应取消");
+    // 关键: A 仍是省10战斗的防守方
+    let battle10_after = world.battles.iter().find(|b| b.province == 10);
+    assert!(battle10_after.is_some(), "省10战斗应仍存在(防守未停)");
+    assert!(
+        battle10_after.unwrap().defenders.contains(&a_id),
+        "停止后 A 应仍是省10防守方(被动防守不停), defenders={:?}",
+        battle10_after.unwrap().defenders
+    );
+}
+
+// ===== 防守主动撤退: 防守中下移动到己方省 → 撤退状态 =====
+
+#[test]
+fn defender_move_to_friendly_becomes_retreat() {
+    // 师在防守战斗中(location==战场省), 下移动令到己方省 → 进入撤退状态,
+    // 从战斗移除, 不改 location(行军中), retreating=true
     let mut reg = Registry::new();
     register_all(&mut reg);
     let interp = Interpreter::new(reg);
     let mut world = setup_world();
-    // A: GER 在省1, 进军省2(主动); 同时省1被FRA攻击 → A 是省1防守方
+    // 省1属FRA, FRA守省1; GER从省10进攻省1 → FRA是省1防守方
     run_setup(&mut world, &interp, r#"
         _setup = {
-            create_division = { owner = GER location = 1 soft_attack = 30 defense = 40 max_org = 60 }
+            create_division = { owner = FRA location = 1 soft_attack = 30 defense = 40 max_org = 60 }
         }
     "#);
-    let a_id = world.divisions.values().next().unwrap().id;
-    // FRA 在省20, 进攻省1(让A成省1守方)
+    let fra_id = world.divisions.values().next().unwrap().id;
     run_setup(&mut world, &interp, r#"
-        _setup = { create_division = { owner = FRA location = 20 soft_attack = 30 defense = 40 max_org = 60 } }
+        _setup = { create_division = { owner = GER location = 10 soft_attack = 100 defense = 40 max_org = 60 } }
     "#);
-    let fra_id = world.divisions.values()
-        .filter(|d| d.owner_tag == "FRA").map(|d| d.id).next().unwrap();
-    run_cmd(&mut world, &interp, &format!("move_division = {{ division = {} target = 1 }}", fra_id));
-    // 现在 A 是省1战斗的 defender(FRA 进攻省1)
+    let ger_id = world.divisions.values()
+        .filter(|d| d.owner_tag == "GER").map(|d| d.id).next().unwrap();
+    // GER 进攻省1 → 省1战斗, FRA 守
+    run_cmd(&mut world, &interp, &format!("move_division = {{ division = {} target = 1 }}", ger_id));
     let battle1 = world.battles.iter().find(|b| b.province == 1).unwrap();
-    assert!(battle1.defenders.contains(&a_id), "A 应是省1守方(被动)");
+    assert!(battle1.defenders.contains(&fra_id), "FRA 应是省1防守方");
 
-    // A 下令进军省2(主动进攻省2, 省2空或己方)
-    // 注: 省2需存在且邻接。setup_world 省1邻接 10和20。用省10(己方)避免开战
-    run_cmd(&mut world, &interp, &format!("move_division = {{ division = {} target = 10 }}", a_id));
-    assert!(world.divisions.get(&a_id).unwrap().destination.is_some(), "A 应有进军令");
-
-    // 停止 A: 取消进军省10, 但保留防守省1
-    run_cmd(&mut world, &interp, &format!("stop_order = {{ division = {} }}", a_id));
-    let d = world.divisions.get(&a_id).unwrap();
-    assert!(d.destination.is_none(), "停止后 A 进军令应取消");
-    // 关键: A 仍是省1战斗的防守方
+    // FRA 防守中下移动令到省20(己方FRA省) → 应变撤退
+    run_cmd(&mut world, &interp, &format!("move_division = {{ division = {} target = 20 }}", fra_id));
+    let d = world.divisions.get(&fra_id).unwrap();
+    assert!(d.retreating, "防守中移动到己方省应进入撤退状态");
+    assert_eq!(d.destination, Some(20), "撤退目标应为省20");
+    assert_eq!(d.location_province, 1, "撤退中 location 不变(行军未到达)");
+    // 从战斗移除(脱离战斗)
     let battle1_after = world.battles.iter().find(|b| b.province == 1);
-    assert!(battle1_after.is_some(), "省1战斗应仍存在(防守未停)");
-    assert!(
-        battle1_after.unwrap().defenders.contains(&a_id),
-        "停止后 A 应仍是省1防守方(被动防守不停), defenders={:?}",
-        battle1_after.unwrap().defenders
-    );
+    if let Some(b) = battle1_after {
+        assert!(!b.defenders.contains(&fra_id), "撤退后应从 defenders 移除");
+        assert!(!b.reserve_defenders.contains(&fra_id), "撤退后应从 reserve_defenders 移除");
+    }
+}
+
+#[test]
+fn defender_move_to_enemy_keeps_attacking() {
+    // 防守中下移动令到敌方省 → 走进攻逻辑(不变撤退)
+    let mut reg = Registry::new();
+    register_all(&mut reg);
+    let interp = Interpreter::new(reg);
+    let mut world = setup_world();
+    run_setup(&mut world, &interp, r#"
+        _setup = {
+            create_division = { owner = FRA location = 1 soft_attack = 30 defense = 40 max_org = 60 }
+        }
+    "#);
+    let fra_id = world.divisions.values().next().unwrap().id;
+    run_setup(&mut world, &interp, r#"
+        _setup = { create_division = { owner = GER location = 10 soft_attack = 100 defense = 40 max_org = 60 } }
+    "#);
+    let ger_id = world.divisions.values()
+        .filter(|d| d.owner_tag == "GER").map(|d| d.id).next().unwrap();
+    run_cmd(&mut world, &interp, &format!("move_division = {{ division = {} target = 1 }}", ger_id));
+
+    // FRA 防守中下移动令到省10(GER敌方省) → 走进攻逻辑(attacking=true), 不变撤退
+    run_cmd(&mut world, &interp, &format!("move_division = {{ division = {} target = 10 }}", fra_id));
+    let d = world.divisions.get(&fra_id).unwrap();
+    assert!(!d.retreating, "移动到敌方省不应变撤退(应走进攻逻辑)");
+    assert!(d.attacking || d.destination.is_some(), "应有移动/进攻指令");
+}
+
+#[test]
+fn attacker_on_battle_province_can_retreat_to_friendly() {
+    // 攻方师在战斗地块(如空降/撤退变攻方), 下移动到己方省 → 也能撤退(不分攻守)
+    let mut reg = Registry::new();
+    register_all(&mut reg);
+    let interp = Interpreter::new(reg);
+    let mut world = setup_world();
+    // GER 师在省1(战场, 属FRA), 作为攻方在省1战斗里
+    run_setup(&mut world, &interp, r#"
+        _setup = {
+            create_division = { owner = GER location = 1 soft_attack = 50 defense = 40 max_org = 60 }
+            create_division = { owner = FRA location = 1 soft_attack = 30 defense = 40 max_org = 60 }
+            start_battle = { attacker = GER defender = FRA province = 1 }
+        }
+    "#);
+    let ger_id = world.divisions.values()
+        .filter(|d| d.owner_tag == "GER").map(|d| d.id).next().unwrap();
+    let battle1 = world.battles.iter().find(|b| b.province == 1).unwrap();
+    assert!(battle1.attackers.contains(&ger_id), "GER 应是省1攻方");
+    assert_eq!(world.divisions.get(&ger_id).unwrap().location_province, 1, "GER location 在战场省1");
+
+    // GER 攻方师在战斗地块, 下移动到省10(己方) → 应变撤退
+    run_cmd(&mut world, &interp, &format!("move_division = {{ division = {} target = 10 }}", ger_id));
+    let d = world.divisions.get(&ger_id).unwrap();
+    assert!(d.retreating, "战斗地块的攻方师下移动到己方省也应撤退(不分攻守)");
+    assert_eq!(d.destination, Some(10), "撤退目标省10");
+    assert_eq!(d.location_province, 1, "撤退中 location 不变");
 }

@@ -242,14 +242,42 @@ pub fn register(reg: &mut Registry) {
         Ok(())
     });
 
-    // 主动行军: 师移动到目标省。下令即判定: 目标有敌军→进攻移动(红箭头, 立刻开战); 否则普通移动(绿)
+    // 主动行军: 师移动到目标省。下令即判定:
+    // - 师在战斗地块 + 目标己方省 → 防守主动撤退(retreating=true, 退出战斗, 不分攻守)
+    // - 目标有敌军 → 进攻移动(红箭头, 立刻开战)
+    // - 否则普通移动(绿)
     reg.register("move_division", |w, p| {
         let div_id = num_of(np(p, "move_division", "division")?)? as u64;
         let target = num_of(np(p, "move_division", "target")?)? as u32;
-        // 先取 owner(释放借用), 再查敌军, 最后改师
-        let owner = w.divisions.get(&div_id)
-            .ok_or_else(|| CmdError::RuntimeError(format!("move_division: 师 {div_id} 不存在")))?
-            .owner_tag.clone();
+        // 先取 owner + location(释放借用), 再做判定
+        let (owner, cur_loc) = match w.divisions.get(&div_id) {
+            Some(d) => (d.owner_tag.clone(), d.location_province),
+            None => return Err(CmdError::RuntimeError(format!("move_division: 师 {div_id} 不存在"))),
+        };
+        // 防守主动撤退判定: 师当前在一场进行中的战斗地块 + 目标是己方控制省
+        // (不分攻守 — 空降/撤退到敌方的攻方师在战斗地块, 下移动到己方省也撤)
+        let on_battle_province = w.battles.iter().any(|b| b.province == cur_loc);
+        let target_is_friendly = w.provinces.get(&target)
+            .map(|p| p.controller == owner).unwrap_or(false);
+        if on_battle_province && target_is_friendly {
+            // 进入撤退状态: retreating=true, destination=目标, 从所有战斗角色移除
+            if let Some(d) = w.divisions.get_mut(&div_id) {
+                d.retreating = true;
+                d.destination = Some(target);
+                d.move_progress = 0.0;
+                d.attacking = false;
+                d.pending_arrival = None;
+                d.supporting = None;
+                // 注: location 不改(行军中, 到达才改), origin 不改(已是当前省)
+            }
+            for b in w.battles.iter_mut() {
+                b.attackers.retain(|&id| id != div_id);
+                b.defenders.retain(|&id| id != div_id);
+                b.reserve_attackers.retain(|&id| id != div_id);
+                b.reserve_defenders.retain(|&id| id != div_id);
+            }
+            return Ok(());
+        }
         // 查目标省有无敌军(非己方的师; 排除撤退师 — 撤退师不当守方被重新拉入)
         let enemies: Vec<u64> = w.divisions.values()
             .filter(|d| d.location_province == target && d.owner_tag != owner && !d.retreating)
