@@ -288,6 +288,15 @@ function refresh() {
     return;
   }
   const prov = state.provinces.find(p => p.id === selectedProvince);
+  // 同步部署面板: 归属+地块跟随选中地块
+  if (prov) {
+    const depOwner = document.getElementById('depOwner');
+    const depProv = document.getElementById('depProv');
+    if (depOwner && (prov.controller === 'GER' || prov.controller === 'FRA')) {
+      depOwner.value = prov.controller;
+    }
+    if (depProv) depProv.value = String(selectedProvince);
+  }
   const provDivs = state.divisions.filter(d => d.loc === selectedProvince);
   const ctrlColor = TAG_COLORS[prov?.controller] || '#666';
   provHeader.innerHTML = `<h3>📍 省${selectedProvince}</h3><span class="prov-tag" style="background:${ctrlColor}33;border:1px solid ${ctrlColor};color:${ctrlColor}">${prov?.controller || '?'}</span>`;
