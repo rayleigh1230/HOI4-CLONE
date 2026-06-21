@@ -108,7 +108,7 @@ create_province = { id = 3 owner = FRA neighbors = { 1 } }</textarea>
     <div class="controls">
       <button class="secondary" onclick="tick(1)">▶ 推进1小时</button>
       <button class="secondary" onclick="tick(24)">⏩ 推进1天</button>
-      <button class="secondary" onclick="autoRun()">⏭ 自动战斗</button>
+      <button id="autoBtn" class="secondary" onclick="toggleTime()">▶ 时间流逝</button>
       <button class="secondary" onclick="reset()">↺ 重置</button>
     </div>
     <div class="status-bar" id="hourDisplay">游戏时间: 第 0 小时</div>
@@ -209,15 +209,19 @@ function tick(hours) {
   refresh();
 }
 
-function autoRun() {
-  if (autoTimer) { clearInterval(autoTimer); autoTimer = null; log('⏸ 暂停'); return; }
-  autoTimer = setInterval(() => {
-    tick(1);
-    const state = getState();
-    const allBroken = state.divisions.every(d => d.broken || d.owner !== state.player);
-    if (allBroken) { clearInterval(autoTimer); autoTimer = null; log('🏁 战斗结束'); }
-  }, 200);
-  log('▶ 自动战斗中...');
+function toggleTime() {
+  const btn = document.getElementById('autoBtn');
+  if (autoTimer) {
+    // 正在流逝 → 暂停
+    clearInterval(autoTimer); autoTimer = null;
+    btn.textContent = '▶ 时间流逝';
+    log('⏸ 已暂停');
+    return;
+  }
+  // 开始时间流逝(纯时钟, 不依赖战斗状态)
+  autoTimer = setInterval(() => { tick(1); }, 200);
+  btn.textContent = '⏸ 暂停';
+  log('▶ 时间流逝中...');
 }
 
 function reset() {
