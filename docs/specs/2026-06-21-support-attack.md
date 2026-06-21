@@ -180,11 +180,12 @@ pub fn cancel_finished_supports(world: &mut World) {
 
 ## 5. UI 变更(web/index.html)
 
-### 5.1 时间停止时显示进军箭头(当前 bug 修复)
-当前: 箭头在 `refresh()` → `drawMap()` 时画, 但时间停止时若没 tick, 状态可能不刷新。
-实际上 drawMap 每次刷新都画箭头(基于 state), 只要下令后调用了 refresh 就会画。
-**需确认**: 下令后是否调用了 refresh。engine_move_division 后 JS 端应调用 refresh。
-如果已调用, 箭头应已显示(移动攻击的红色箭头)。支援攻击的蓝色箭头同理。
+### 5.1 时间停止时显示箭头(已满足, 无需改动)
+当前: 下令后 JS 调用 refresh()(click 监听 line 533), drawMap 基于 state 画箭头。
+- 移动攻击(红箭头): d.attacking=true, d.destination=目标, WASM 已暴露 → 已显示。 ✓
+- 普通移动(绿箭头): 同理已显示。 ✓
+- 撤退(灰箭头): 已显示。 ✓
+时间停止时下令, refresh() 立即触发, 箭头立即出现。**无需改动**, 只需新增支援攻击的蓝箭头(§5.2)。
 
 ### 5.2 支援攻击蓝色箭头(无进度填充)
 WASM 序列化加 `supporting` 字段(wasm_api.rs serialize_state):
@@ -212,10 +213,28 @@ if (d.supporting && pos[d.supporting]) {
 }
 ```
 
-### 5.3 UI 操作: 发起支援攻击
-当前 UI 是"选中师 → 点目标省 → move_division"。需要区分"移动攻击"vs"支援攻击"。
-方案: 加一个切换按钮/模式键(如 Shift+点击 = 支援攻击), 或加一个独立按钮。
-**MVP**: 加一个复选框"支援攻击模式", 勾选后点目标省发 support_attack 而非 move_division。
+### 5.3 UI 操作: 发起支援攻击(参考 HOI4 原版按键)
+
+操作语义参考原版 HOI4(查证结果):
+- 原版支援攻击 = **Ctrl + 右键**点击战斗气泡
+- 原版战略部署 = 另一个修饰键(本项目暂不实现, 留空)
+
+本项目按键映射:
+| 操作 | 动作 |
+|---|---|
+| **左键点师图标** | 选中师 |
+| **左键点空地块** | 取消选中 / 选地块看部队 |
+| **右键点省** | 移动/进攻(红/绿箭头, 自动判断敌军) |
+| **Ctrl + 右键点省** | 支援攻击(蓝箭头) |
+
+实现改动(web/index.html 的 click 监听):
+- 当前: `click` 事件统一处理(左键选中师→点省移动)。
+- 改为:
+  - `click`(左键): 点师=选中; 点省(有选中师)= 不再触发移动(改用右键); 点空地块=选地块。
+  - `contextmenu`(右键): 若有选中师 → 调 engine_move_division(普通)。
+  - `contextmenu` + `e.ctrlKey`: 若有选中师 → 调 engine_support_attack(支援)。
+  - 右键默认行为 `e.preventDefault()`(屏蔽浏览器右键菜单)。
+- 地图提示文字更新: "左键选中/看部队 | 右键移动进攻 | Ctrl+右键支援攻击"
 
 ---
 
