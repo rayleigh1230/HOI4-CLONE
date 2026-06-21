@@ -10,6 +10,7 @@ impl GameClock {
     pub fn tick(interp: &Interpreter, world: &mut World) {
         world.hour += 1;
         world.fire_event(interp, "on_hourly");
+        crate::combat::movement::check_engagements(world); // 检查移动中师是否遇敌→开战
         crate::combat::resolve::resolve_all_battles(world); // 战斗结算(含撤退/包围判定)
         crate::combat::width::reinforce_reserves(world); // 预备队补位
         crate::combat::movement::advance_movement(&mut *world); // 行军推进

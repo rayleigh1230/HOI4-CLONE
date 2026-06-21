@@ -14,6 +14,49 @@ const COMBAT_MOVEMENT_SPEED: f64 = 0.33;
 /// 占领省份时 org 损失比例(原版 ORG_LOSS_FACTOR_ON_CONQUER)
 const ORG_LOSS_ON_CONQUER: f64 = 0.2;
 
+/// 每小时检查: 移动中的师, 目标地块出现敌军 → 立刻开战
+/// (交战由"地块有无敌军"决定, 非到达决定)
+pub fn check_engagements(world: &mut World) {
+    // 收集需要检查的师 (id, dest, owner)
+    let moving: Vec<(u64, u32, String)> = world.divisions.iter()
+        .filter_map(|(id, d)| {
+            d.destination.map(|dest| (*id, dest, d.owner_tag.clone()))
+        })
+        .collect();
+    // 已在战斗中的师(不重复触发)
+    let in_battle: std::collections::HashSet<u64> = world.battles.iter()
+        .flat_map(|b| b.attackers.iter().chain(b.defenders.iter())
+            .chain(b.reserve_attackers.iter()).chain(b.reserve_defenders.iter()).copied())
+        .collect();
+
+    for (div_id, dest, owner) in moving {
+        if in_battle.contains(&div_id) {
+            continue; // 已在战斗中
+        }
+        // 查目标地块有无敌军师
+        let enemies: Vec<u64> = world.divisions.values()
+            .filter(|od| od.location_province == dest && od.owner_tag != owner && !od.is_annihilated())
+            .map(|od| od.id)
+            .collect();
+        if enemies.is_empty() {
+            continue;
+        }
+        // 有敌军 → 开战
+        let existing = world.battles.iter().position(|b| b.province == dest);
+        if let Some(bidx) = existing {
+            world.battles[bidx].attackers.push(div_id);
+        } else {
+            let bid = world.next_battle_id;
+            world.next_battle_id += 1;
+            world.battles.push(crate::runtime::entities::Battle {
+                id: bid, province: dest,
+                attackers: vec![div_id], defenders: enemies,
+                ..Default::default()
+            });
+        }
+    }
+}
+
 /// 推进所有正在移动的师(每小时调用)
 pub fn advance_movement(world: &mut World) {
     let moving: Vec<u64> = world
@@ -47,35 +90,13 @@ pub fn advance_movement(world: &mut World) {
             }
         }
     }
-    // 第二阶段: 到达后处理(此时无 divisions 可变借用冲突)
+    // 第二阶段: 到达后占领(交战由 check_engagements 每小时统一判定)
     for a in arrivals {
-        // 检查该省有无敌军师(对方可能同时到达)
-        let enemies: Vec<u64> = world.divisions.values()
-            .filter(|od| od.location_province == a.dest && od.owner_tag != a.owner && !od.is_annihilated())
-            .map(|od| od.id)
-            .collect();
-        if !enemies.is_empty() {
-            // 到达遇敌 → 开战(若该省已有战斗则加入)
-            let existing = world.battles.iter().position(|b| b.province == a.dest);
-            if let Some(bidx) = existing {
-                // 加入已有战斗
-                if !world.battles[bidx].attackers.contains(&a.id) {
-                    world.battles[bidx].attackers.push(a.id);
-                }
-            } else {
-                // 新建战斗
-                let bid = world.next_battle_id;
-                world.next_battle_id += 1;
-                world.battles.push(crate::runtime::entities::Battle {
-                    id: bid, province: a.dest,
-                    attackers: vec![a.id], defenders: enemies,
-                    ..Default::default()
-                });
-            }
-            continue; // 有敌军, 不占领
-        }
-        // 无敌军 + 进攻到达 → 占领
-        if a.was_attacking {
+        // 地块非己方 → 占领(先到先占; 竞速场景)
+        let is_own = world.provinces.get(&a.dest)
+            .map(|p| p.controller == a.owner)
+            .unwrap_or(false);
+        if !is_own {
             if let Some(p) = world.provinces.get_mut(&a.dest) {
                 p.controller = a.owner.clone();
                 p.owner = a.owner;
