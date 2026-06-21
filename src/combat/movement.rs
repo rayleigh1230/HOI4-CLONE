@@ -228,4 +228,100 @@ mod tests {
         // 省份归 GER
         assert_eq!(w.provinces.get(&2).unwrap().controller, "GER");
     }
+
+    // ===== P2: 地块被进攻 → 归属地师自动成防守方(即使该师正进攻别处) =====
+
+    /// 活着的步兵师(strength>0 否则被 is_annihilated 过滤)
+    fn live_div() -> Division {
+        Division {
+            max_strength: 20.0, strength: 20.0,
+            max_org: 60.0, org: 60.0,
+            ..Default::default()
+        }
+    }
+
+    /// 师A(GER)归属省1, 正在进攻省2(destination=2, location仍=1);
+    /// 师B(FRA)从省3向省1进军 → 省1应爆发战斗, A 应自动成为省1的**防守方**。
+    #[test]
+    fn t_p2_division_defends_own_province_while_attacking_elsewhere() {
+        let mut w = World::new();
+        // 师A: GER, 归属省1, 正进攻省2
+        let mut a = live_div();
+        a.owner_tag = "GER".into();
+        a.location_province = 1;
+        a.destination = Some(2);
+        a.origin_province = 1;
+        a.attacking = true;
+        let a = w.add_division(a);
+        // 师B: FRA, 在省3, 向省1进军
+        let mut b = live_div();
+        b.owner_tag = "FRA".into();
+        b.location_province = 3;
+        b.destination = Some(1);
+        b.origin_province = 3;
+        b.attacking = true;
+        let b = w.add_division(b);
+
+        check_engagements(&mut w);
+
+        // 省1 应有一场战斗
+        let battle1 = w.battles.iter().find(|bl| bl.province == 1);
+        assert!(battle1.is_some(), "省1应爆发战斗(B向省1进军)");
+        let bl = battle1.unwrap();
+        // B 是省1战斗的攻方(向省1进军)
+        assert!(bl.attackers.contains(&b), "B应是省1战斗攻方, attackers={:?}", bl.attackers);
+        // A 是省1战斗的守方(归属省1, 即使正在进攻省2)
+        assert!(
+            bl.defenders.contains(&a),
+            "A(归属省1)应自动成省1防守方, defenders={:?}", bl.defenders
+        );
+    }
+
+    /// A 进攻省2 的战斗不应被破坏(A 仍是省2的攻方)。
+    #[test]
+    fn t_p2_original_attack_uninterrupted() {
+        let mut w = World::new();
+        let mut a = live_div();
+        a.owner_tag = "GER".into();
+        a.location_province = 1;
+        a.destination = Some(2);
+        a.origin_province = 1;
+        a.attacking = true;
+        let a = w.add_division(a);
+        // C(FRA) 在省2防守 → A vs C 战斗(省2)
+        let mut c = live_div();
+        c.owner_tag = "FRA".into();
+        c.location_province = 2;
+        let c = w.add_division(c);
+        // B(FRA) 从省3 进军省1 → 触发省1战斗, A 成省1守方
+        let mut b = live_div();
+        b.owner_tag = "FRA".into();
+        b.location_province = 3;
+        b.destination = Some(1);
+        b.origin_province = 3;
+        b.attacking = true;
+        let b = w.add_division(b);
+
+        check_engagements(&mut w);
+
+        // 省2 战斗: A 仍是攻方
+        let battle2 = w.battles.iter().find(|bl| bl.province == 2);
+        assert!(battle2.is_some(), "省2战斗应存在(A进攻C)");
+        let bl2 = battle2.unwrap();
+        assert!(bl2.attackers.contains(&a), "A仍是省2攻方");
+        assert!(bl2.defenders.contains(&c), "C是省2守方");
+
+        // 省1 战斗: A 是守方(同时打两场)
+        let battle1 = w.battles.iter().find(|bl| bl.province == 1);
+        assert!(battle1.is_some(), "省1战斗应存在(B进攻省1)");
+        let bl1 = battle1.unwrap();
+        assert!(bl1.attackers.contains(&b), "B是省1攻方");
+        assert!(bl1.defenders.contains(&a), "A同时是省1守方(状态共享, 多战场)");
+
+        // A 同时出现在两场战斗中
+        let a_in_battles = w.battles.iter()
+            .filter(|bl| bl.attackers.contains(&a) || bl.defenders.contains(&a))
+            .count();
+        assert_eq!(a_in_battles, 2, "A应同时参与两场战斗");
+    }
 }

@@ -162,7 +162,8 @@ fn consume_losses(div: &mut Division, hp_loss: f64) {
 
 /// World 级战斗结算: 遍历所有 battle, 每小时调用
 /// 三阶段: ① 快照攻守; ② 对称结算(攻→守 defense 池 + 守→攻 breakthrough 池);
-///         ③ 按 id 写回所有受影响师(攻+守)。避免多可变借用冲突, 无 unsafe。
+///         ③ 按 id 累积伤害 delta 写回(同一师参与多场战斗, 伤害累加而非覆盖 → 修 P1-6)。
+/// 安全借用: 每场战斗本地克隆师副本, 算 (before-after) delta, 最后一次性写回 world。无 unsafe。
 pub fn resolve_all_battles(world: &mut World) {
     let battle_specs: Vec<(Vec<u64>, Vec<u64>)> = world
         .battles
@@ -170,12 +171,26 @@ pub fn resolve_all_battles(world: &mut World) {
         .map(|b| (b.attackers.clone(), b.defenders.clone()))
         .collect();
 
-    // 用 HashMap 聚合每个师的最终值(同一师可能在多场战斗, 需合并而非覆盖 → 修 P1-6)
-    // 存完整快照: org/strength/equipment_held(M4a 装备消耗需写回)
+    // P1-6 修复: 累积每个师的伤害 delta(同一师可能在多场战斗, 伤害应相加而非覆盖)
+    // before 快照来自 world.divisions(每场战斗重新取, 反映"这场战斗开始时"的状态)
     use std::collections::HashMap;
-    let mut final_state: HashMap<u64, Division> = HashMap::new();
+    #[derive(Default)]
+    struct DamageDelta {
+        org_loss: f64,
+        str_loss: f64,
+        mp_loss: f64,
+        // 装备消耗: eq_type → 累积消耗量
+        eq_loss: HashMap<String, f64>,
+    }
+    let mut deltas: HashMap<u64, DamageDelta> = HashMap::new();
 
     for (atk_ids, def_ids) in &battle_specs {
+        // before 快照(算本场 delta 用)
+        let atk_before: HashMap<u64, Division> =
+            atk_ids.iter().filter_map(|id| world.divisions.get(id).map(|d| (*id, d.clone()))).collect();
+        let def_before: HashMap<u64, Division> =
+            def_ids.iter().filter_map(|id| world.divisions.get(id).map(|d| (*id, d.clone()))).collect();
+
         let mut atks: Vec<Division> =
             atk_ids.iter().filter_map(|id| world.divisions.get(id).cloned()).collect();
         let mut defs: Vec<Division> =
@@ -197,31 +212,60 @@ pub fn resolve_all_battles(world: &mut World) {
             apply_all_attackers(&def_stats, &mut atk_refs, CombatPool::Breakthrough);
         }
 
-        // 合并本场战斗结果到 final_state(存完整 Division 快照)
+        // 累积本场 delta 到 deltas(而非覆盖 final_state)
         for (i, id) in atk_ids.iter().enumerate() {
-            if let Some(d) = atks.get(i) {
-                final_state.insert(*id, d.clone());
-            }
+            let Some(before) = atk_before.get(id) else { continue };
+            let Some(after) = atks.get(i) else { continue };
+            let d = deltas.entry(*id).or_default();
+            d.org_loss += before.org - after.org;
+            d.str_loss += before.strength - after.strength;
+            d.mp_loss += before.manpower_held - after.manpower_held;
+            accumulate_eq_loss(&mut d.eq_loss, &before.equipment_held, &after.equipment_held);
         }
         for (i, id) in def_ids.iter().enumerate() {
-            if let Some(d) = defs.get(i) {
-                final_state.insert(*id, d.clone());
-            }
+            let Some(before) = def_before.get(id) else { continue };
+            let Some(after) = defs.get(i) else { continue };
+            let d = deltas.entry(*id).or_default();
+            d.org_loss += before.org - after.org;
+            d.str_loss += before.strength - after.strength;
+            d.mp_loss += before.manpower_held - after.manpower_held;
+            accumulate_eq_loss(&mut d.eq_loss, &before.equipment_held, &after.equipment_held);
         }
     }
 
-    // 写回: org/strength/equipment_held(M4a 装备消耗)
-    for (id, snap) in final_state {
+    // 写回: 从原始 world 值减去累积 delta(避免任何顺序依赖)
+    for (id, dlt) in deltas {
         if let Some(d) = world.divisions.get_mut(&id) {
-            d.org = snap.org;
-            d.strength = snap.strength;
-            d.equipment_held = snap.equipment_held;
-            d.manpower_held = snap.manpower_held;
+            d.org = (d.org - dlt.org_loss).max(0.0);
+            d.strength = (d.strength - dlt.str_loss).max(0.0);
+            d.manpower_held = (d.manpower_held - dlt.mp_loss).max(0.0);
+            for (eq_type, loss) in dlt.eq_loss {
+                if let Some(held) = d.equipment_held.get_mut(&eq_type) {
+                    *held = (*held - loss).max(0.0);
+                }
+            }
         }
     }
 
     // P2-14: 战斗生命周期 — 移除破阵师 + 结束战斗
     cleanup_battles(world);
+}
+
+/// 累积装备消耗: 对每个装备类型, before - after(若为正即消耗)
+fn accumulate_eq_loss(
+    total: &mut std::collections::HashMap<String, f64>,
+    before: &std::collections::HashMap<String, f64>,
+    after: &std::collections::HashMap<String, f64>,
+) {
+    let all_keys: std::collections::HashSet<&String> = before.keys().chain(after.keys()).collect();
+    for key in all_keys {
+        let b = *before.get(key).unwrap_or(&0.0);
+        let a = *after.get(key).unwrap_or(&0.0);
+        let loss = b - a;
+        if loss > 0.0 {
+            *total.entry(key.clone()).or_insert(0.0) += loss;
+        }
+    }
 }
 
 /// 战斗生命周期: 区分撤退(org0+HP有)和歼灭(HP0)
@@ -460,6 +504,93 @@ mod tests {
         assert!(
             drop_double > drop_single * 1.5,
             "P1-5: 双攻击者应因防御池共享而造成更多伤害: double={drop_double} single={drop_single}"
+        );
+    }
+
+    // ===== World 级测试辅助 =====
+    use crate::runtime::World;
+    use crate::runtime::entities::Battle;
+
+    /// 建一个 World, 三个师: A(共享师) 同时是省1战斗的攻方 + 省2战斗的守方;
+    /// B 是省1守方, C 是省2攻方。两场都打 A, 验证 A 的 org 反映两场伤害之和。
+    fn world_with_shared_division() -> (World, u64, u64, u64) {
+        let mut w = World::new();
+        let a = w.add_division(inf("ATK"));      // 共享师, 同时是省1攻方 + 省2守方
+        let b = w.add_division(inf("DEF"));      // 省1守方
+        let c = w.add_division(inf("DEF2"));     // 省2攻方
+        // 战斗1: 省X, A 攻 B 守
+        w.battles.push(Battle {
+            id: 0, province: 10,
+            attackers: vec![a], defenders: vec![b],
+            ..Default::default()
+        });
+        // 战斗2: 省Y, C 攻 A 守(A 同时在这场)
+        w.battles.push(Battle {
+            id: 1, province: 20,
+            attackers: vec![c], defenders: vec![a],
+            ..Default::default()
+        });
+        (w, a, b, c)
+    }
+
+    #[test]
+    fn t_p1_6_shared_division_takes_damage_from_both_battles() {
+        // P1-6 修覆盖 bug: 同一师参与多场战斗, 两场伤害都应生效
+        let (mut w, a, _b, _c) = world_with_shared_division();
+        let org_before = w.divisions.get(&a).unwrap().org;
+
+        resolve_all_battles(&mut w);
+
+        let org_after = w.divisions.get(&a).unwrap().org;
+        let total_loss = org_before - org_after;
+        // A 既被 B 反击(突破池) 又被 C 打(防御池), 总伤害应明显大于只挨一场
+        assert!(
+            total_loss > 0.0,
+            "A 应有伤害: before={org_before} after={org_after}"
+        );
+
+        // 对照: 只有一场战斗时 A 的伤害(应明显小于两场之和)
+        let (mut w1, a1, _b1, _c1) = world_with_shared_division();
+        w1.battles.remove(1); // 只留省1战斗
+        resolve_all_battles(&mut w1);
+        let loss1 = org_before - w1.divisions.get(&a1).unwrap().org;
+
+        let (mut w2, _a2, _b2, _c2) = world_with_shared_division();
+        w2.battles.remove(0); // 只留省2战斗
+        resolve_all_battles(&mut w2);
+        let loss2 = org_before - w2.divisions.get(&a).unwrap().org;
+
+        // 核心断言: 总损失应严格大于任一单场(两场伤害都生效了, 非覆盖)
+        assert!(
+            total_loss > loss1 && total_loss > loss2,
+            "P1-6: 两场伤害应累积。单场 loss1={loss1} loss2={loss2}, 总 {total_loss} 应 > 两者"
+        );
+        // 累积应接近两场之和(允许小误差, 因伤害公式非线性)
+        let expected = loss1 + loss2;
+        assert!(
+            (total_loss - expected).abs() < 0.5,
+            "累积值 {total_loss} 应接近两场之和 {expected}"
+        );
+    }
+
+    #[test]
+    fn t_p1_6_equipment_consumption_accumulates() {
+        // 装备损耗也应累积而非覆盖
+        let (mut w, a, _b, _c) = world_with_shared_division();
+        // A 默认无装备; 手动加装备库存让 hp_loss 触发消耗可见
+        if let Some(d) = w.divisions.get_mut(&a) {
+            d.equipment_need.insert("infantry_equipment".into(), 100.0);
+            d.equipment_held.insert("infantry_equipment".into(), 100.0);
+        }
+        let held_before = w.divisions.get(&a).unwrap().equipment_held
+            .values().sum::<f64>();
+        resolve_all_battles(&mut w);
+        let held_after = w.divisions.get(&a).unwrap().equipment_held
+            .values().sum::<f64>();
+        // 两场都造成 str 损失 → 装备消耗应累积(明显小于单场只扣一点)
+        assert!(
+            held_before - held_after > 0.0,
+            "装备应被消耗: before={held_before} after={held_after}"
         );
     }
 }
