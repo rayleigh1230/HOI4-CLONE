@@ -38,6 +38,18 @@
   .combat-chip { display: inline-block; padding: 2px 6px; margin: 1px; border-radius: 3px; font-size: 10px; }
   .combat-chip.ger { background: #e9456044; border: 1px solid #e94560; }
   .combat-chip.fra { background: #16c79a44; border: 1px solid #16c79a; }
+  /* 交战面板部队卡片(含4条迷你状态条, 无数值) */
+  .unit-card { display: inline-block; vertical-align: top; background: #1a1a2e; border-radius: 4px; padding: 4px 6px; margin: 2px; min-width: 78px; border: 1px solid #0f3460; }
+  .unit-card.ger { border-color: #e94560; }
+  .unit-card.fra { border-color: #16c79a; }
+  .unit-card.broken { opacity: 0.45; }
+  .unit-card-head { font-size: 10px; margin-bottom: 3px; font-weight: bold; }
+  .mini-bar { height: 4px; background: #0a0a1a; border-radius: 2px; overflow: hidden; margin: 1px 0; }
+  .mini-bar > div { height: 100%; }
+  .mini-bar .org { background: #4cd964; }
+  .mini-bar .str { background: #ff6b6b; }
+  .mini-bar .eq { background: #ffd700; }
+  .mini-bar .mp { background: #a29bfe; }
   .combat-vs { color: #888; font-size: 11px; }
   .combat-reserve { font-size: 10px; color: #888; margin-top: 4px; }
   .combat-reserve .combat-chip { opacity: 0.6; }
@@ -241,17 +253,29 @@ function getState() {
 function refresh() {
   const state = getState();
   document.getElementById('hourDisplay').textContent = `游戏时间: 第 ${state.hour} 小时`;
-  // 交战实时视窗: 前线双方 + 预备队
+  // 交战实时视窗: 前线双方 + 预备队(每部队显示4条状态条, 无数值)
   const bi = document.getElementById('battleInfo');
   const divMap = {};
   state.divisions.forEach(d => { divMap[d.id] = d; });
-  const chip = id => {
+  // 部队卡片: 编号 + 4条迷你状态条(org/str/eq/mp 比例填充)
+  const unitCard = id => {
     const d = divMap[id];
     if (!d) return '';
     const cls = d.owner === 'GER' ? 'ger' : 'fra';
-    return `<span class="combat-chip ${cls}">${d.owner}#${id}</span>`;
+    const orgPct = d.max_org > 0 ? (d.org / d.max_org * 100) : 0;
+    const strPct = d.max_str > 0 ? (d.str / d.max_str * 100) : 0;
+    const eqPct = (d.eq_ratio || 0) * 100;
+    const mpPct = (d.mp_ratio || 0) * 100;
+    const brokenCls = d.annihilated ? ' broken' : '';
+    return `<div class="unit-card ${cls}${brokenCls}">
+      <div class="unit-card-head">${d.owner}#${id}</div>
+      <div class="mini-bar"><div class="org" style="width:${orgPct}%"></div></div>
+      <div class="mini-bar"><div class="str" style="width:${strPct}%"></div></div>
+      <div class="mini-bar"><div class="eq" style="width:${eqPct}%"></div></div>
+      <div class="mini-bar"><div class="mp" style="width:${mpPct}%"></div></div>
+    </div>`;
   };
-  const sideChips = ids => (ids || []).map(chip).join('') || '<span style="color:#555">无</span>';
+  const sideCards = ids => (ids || []).map(unitCard).join('') || '<span style="color:#555">无</span>';
   if (state.battles && state.battles.length > 0) {
     bi.innerHTML = state.battles.map(b => {
       const atkOwner = divMap[b.atk[0]] ? divMap[b.atk[0]].owner : '?';
@@ -263,17 +287,17 @@ function refresh() {
         <div class="combat-row">
           <div class="combat-side">
             <div class="combat-side-label">攻方前线 (${atkOwner})</div>
-            ${sideChips(b.atk)}
+            ${sideCards(b.atk)}
           </div>
           <div class="combat-vs">VS</div>
           <div class="combat-side">
             <div class="combat-side-label">守方前线 (${defOwner})</div>
-            ${sideChips(b.def)}
+            ${sideCards(b.def)}
           </div>
         </div>
         ${(resAtk || resDef) ? `<div class="combat-reserve">
           <div class="combat-side-label">预备队(2%/h补位)</div>
-          攻:${sideChips(b.res_atk)} 守:${sideChips(b.res_def)}
+          攻:${sideCards(b.res_atk)} 守:${sideCards(b.res_def)}
         </div>` : ''}
       </div>`;
     }).join('');
@@ -435,27 +459,44 @@ function drawMap() {
     const bx = pos[d.loc] ? pos[d.loc].x : 0;
     const by = pos[d.loc] ? pos[d.loc].y : 0;
     if (!pos[d.loc]) return;
-    // 移动箭头(进攻红/普通绿/撤退青)
-    if (d.dest && pos[d.dest]) {
-      const tx = pos[d.dest].x, ty = pos[d.dest].y;
-      ctx.strokeStyle = d.attacking ? '#e94560' : (d.retreating ? '#16c79a' : '#4cd964');
-      ctx.lineWidth = 2; ctx.setLineDash([]);
-      ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(tx, ty); ctx.stroke();
-      // 箭头头
+    // 行军箭头: 按 move_progress 比例填充(从出发地到当前位置), 箭头头在进度位置
+    // 颜色: 进攻红 / 普通绿 / 撤退灰
+    const drawProgressArrow = (targetProv, progress, color, dashed) => {
+      if (!pos[targetProv]) return;
+      const tx = pos[targetProv].x, ty = pos[targetProv].y;
+      const p = Math.max(0, Math.min(1, progress)); // 钳到 0-1
+      const cx = bx + (tx - bx) * p; // 当前进度的位置
+      const cy = by + (ty - by) * p;
       const ang = Math.atan2(ty - by, tx - bx);
-      ctx.beginPath();
-      ctx.moveTo(tx, ty);
-      ctx.lineTo(tx - 8 * Math.cos(ang - 0.4), ty - 8 * Math.sin(ang - 0.4));
-      ctx.lineTo(tx - 8 * Math.cos(ang + 0.4), ty - 8 * Math.sin(ang + 0.4));
-      ctx.closePath(); ctx.fill();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 3;
+      ctx.setLineDash(dashed ? [4, 3] : []);
+      // 已填充段(出发地 → 当前进度)
+      ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(cx, cy); ctx.stroke();
+      // 未填充段(淡色虚线, 表示剩余路程)
+      ctx.strokeStyle = color + '44';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([2, 3]);
+      ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(tx, ty); ctx.stroke();
+      ctx.setLineDash([]);
+      // 箭头头(在进度位置, 已开始行军才画)
+      if (p > 0.02) {
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.moveTo(cx, cy);
+        ctx.lineTo(cx - 9 * Math.cos(ang - 0.4), cy - 9 * Math.sin(ang - 0.4));
+        ctx.lineTo(cx - 9 * Math.cos(ang + 0.4), cy - 9 * Math.sin(ang + 0.4));
+        ctx.closePath(); ctx.fill();
+      }
+    };
+    // 行军中(destination 有值): 按进度填充
+    if (d.dest && pos[d.dest]) {
+      const color = d.retreating ? '#888888' : (d.attacking ? '#e94560' : '#4cd964');
+      drawProgressArrow(d.dest, d.progress || 0, color, false);
     }
-    // pending_arrival: 进度满但等战斗胜 → 画虚线红箭头(表示"已到前线, 待占领")
+    // pending_arrival: 进度满等战斗胜 → 实线满箭头(虚线表示待占领)
     if (d.pending && pos[d.pending]) {
-      const tx = pos[d.pending].x, ty = pos[d.pending].y;
-      ctx.strokeStyle = '#e94560';
-      ctx.lineWidth = 2; ctx.setLineDash([4, 3]);
-      ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(tx, ty); ctx.stroke();
-      ctx.setLineDash([]); // 恢复实线
+      drawProgressArrow(d.pending, 1.0, '#e94560', true);
     }
     const color = TAG_COLORS[d.owner] || '#fff';
     ctx.fillStyle = d.annihilated ? '#444' : color;
