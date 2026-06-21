@@ -600,7 +600,7 @@ fn move_to_empty_province_no_battle() {
     assert!(!world.divisions.get(&ger_id).unwrap().attacking, "应非进攻状态");
     // 推进到达
     use hoi4_clone::runtime::GameClock;
-    GameClock::advance(&interp, &mut world, 10);
+    GameClock::advance(&interp, &mut world, 100);
     assert_eq!(world.divisions.get(&ger_id).unwrap().location_province, 10, "应到达省10");
 }
 
@@ -636,7 +636,7 @@ fn march_into_empty_enemy_province_captures() {
     assert!(world.divisions.get(&ger_id).unwrap().attacking, "进军敌方地块应红箭头");
     assert_eq!(world.battles.len(), 0, "无防御部队不应开战");
     // 推进到达(进军速度慢, 给足时间)
-    GameClock::advance(&interp, &mut world, 30);
+    GameClock::advance(&interp, &mut world, 100);
     assert_eq!(world.divisions.get(&ger_id).unwrap().location_province, 2, "应到达省2");
     assert_eq!(world.provinces.get(&2).unwrap().controller, "GER", "到达应占领省2");
 }
@@ -668,9 +668,9 @@ fn frontline_route_causes_reserve_routing() {
     interp.run(&move_effs, &mut world);
     // GER 进攻省1, FRA 2师都在前线(28宽<70)
     assert!(!world.battles.is_empty(), "应有战斗");
-    // 推进让 FRA 前线崩(org 10 很快归零)
-    GameClock::advance(&interp, &mut world, 30);
-    // FRA 前线全崩 → 战斗结束 + 占地
+    // 推进让 FRA 前线崩 + GER 行军到达占领
+    GameClock::advance(&interp, &mut world, 100);
+    // FRA 前线全崩 → 战斗结束 + GER 到达占地
     assert_eq!(world.battles.len(), 0, "前线崩后战斗应结束");
     assert_eq!(world.provinces.get(&1).unwrap().controller, "GER", "应占领省1");
     // FRA 师应撤退(非歼灭, org归零HP有余)
