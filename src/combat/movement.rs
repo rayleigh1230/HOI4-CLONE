@@ -90,9 +90,14 @@ pub fn advance_movement(world: &mut World) {
             }
         }
     }
-    // 第二阶段: 到达后占领(交战由 check_engagements 每小时统一判定)
+    // 第二阶段: 到达后占领(规则2: 战斗中不占领; 无战斗+无敌军+非己方→占领)
     for a in arrivals {
-        // 地块非己方 → 占领(先到先占; 竞速场景)
+        // 规则2: 该省有战斗进行中 → 不占领(战斗结果决定归属)
+        let has_battle = world.battles.iter().any(|b| b.province == a.dest);
+        if has_battle {
+            continue;
+        }
+        // 无战斗 + 非己方 → 占领
         let is_own = world.provinces.get(&a.dest)
             .map(|p| p.controller == a.owner)
             .unwrap_or(false);
