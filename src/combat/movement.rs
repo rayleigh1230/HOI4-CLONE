@@ -6,8 +6,8 @@
 //! - 撤退(retreating): 脱离战斗, 速度+25%
 use crate::runtime::World;
 
-/// 每小时移动进度基准(约5小时到达一个省)
-const MOVE_RATE: f64 = 0.2;
+/// 每小时移动进度基准(约20小时到达一个省, 让行军过程可见)
+const MOVE_RATE: f64 = 0.05;
 const RETREAT_SPEED_BONUS: f64 = 0.25;
 /// 进攻移动(战斗中)速度系数(原版 COMBAT_MOVEMENT_SPEED)
 const COMBAT_MOVEMENT_SPEED: f64 = 0.33;
