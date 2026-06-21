@@ -791,3 +791,119 @@ fn retreating_division_not_reengaged_by_check_engagements() {
         );
     }
 }
+
+#[test]
+fn retreating_into_enemy_occupied_province_starts_battle() {
+    // 回归 bug: 撤退师到达目标省时, 若该省已被敌方占领+有敌军,
+    // 应爆发战斗(撤退师变攻方), 而非直接占领该省。
+    // 直接构造场景, 精确控制撤退到达逻辑:
+    //   FRA 师正在撤退(retreating=true, destination=省20, progress 接近满)
+    //   省20 控制权=GER(敌方), 且有 GER 师驻守
+    //   advance_movement 推进到到达 → 不应占领省20, 应进入 pending 等开战
+    //   check_engagements → 撤退师变攻方开战
+    use hoi4_clone::combat::movement::{advance_movement, check_engagements};
+    let mut world = World::new();
+    world.provinces.insert(1, hoi4_clone::runtime::Province {
+        id: 1, owner: "FRA".into(), controller: "FRA".into(),
+        terrain: "plains".into(), neighbors: vec![20],
+    });
+    world.provinces.insert(20, hoi4_clone::runtime::Province {
+        id: 20, owner: "GER".into(), controller: "GER".into(),
+        terrain: "plains".into(), neighbors: vec![1],
+    });
+    // FRA 师在省1, 撤退中, 目标省20, 进度几乎满(1次 advance 即到达)
+    let fra = world.add_division(hoi4_clone::runtime::entities::Division {
+        owner_tag: "FRA".into(), location_province: 1,
+        destination: Some(20), origin_province: 1,
+        move_progress: 0.99, retreating: true,
+        max_org: 60.0, org: 60.0, max_strength: 20.0, strength: 20.0,
+        ..Default::default()
+    });
+    // GER 师驻守省20(敌方占领+有部队)
+    let ger = world.add_division(hoi4_clone::runtime::entities::Division {
+        owner_tag: "GER".into(), location_province: 20, origin_province: 20,
+        max_org: 60.0, org: 60.0, max_strength: 20.0, strength: 20.0,
+        ..Default::default()
+    });
+
+    advance_movement(&mut world);
+
+    // 核心断言1: 省20 不应被占领(仍属 GER)
+    let prov20 = world.provinces.get(&20).unwrap();
+    assert_eq!(
+        prov20.controller, "GER",
+        "撤退师到达敌方驻军省不应直接占领(当前 controller={})",
+        prov20.controller
+    );
+    // 核心断言2: 撤退师进入 pending_arrival(等开战), 且清除了 retreating(即将变攻方)
+    let fra_div = world.divisions.get(&fra).unwrap();
+    assert_eq!(fra_div.pending_arrival, Some(20), "应进入 pending_arrival 等开战");
+    assert!(!fra_div.retreating, "撤退师到达敌方省应清 retreating(即将变攻方)");
+
+    // check_engagements → 应开战(FRA 变攻方, GER 守)
+    check_engagements(&mut world);
+    let battle = world.battles.iter().find(|b| b.province == 20);
+    assert!(battle.is_some(), "省20 应爆发战斗");
+    let battle = battle.unwrap();
+    assert!(battle.attackers.contains(&fra), "撤退师 FRA 应成省20战斗攻方");
+    assert!(battle.defenders.contains(&ger), "GER 师应成省20战斗守方");
+}
+
+#[test]
+fn retreating_to_enemy_province_then_loses_continues_retreat_or_dies() {
+    // 完整流程(用户需求): 撤退师到达敌方驻军省 → 变攻方开战 →
+    //   胜 → 占领; 败 → 继续撤退(回origin); origin被占无己方邻省 → 包围歼灭。
+    // 本测验证"败"分支: FRA 弱(刚撤退org低), 打不过省20的 GER → 应退出战斗保留,
+    // 不应卡死也不应错误占领省20。
+    use hoi4_clone::combat::movement::{advance_movement, check_engagements};
+    use hoi4_clone::combat::resolve::resolve_all_battles;
+    let mut world = World::new();
+    world.provinces.insert(1, hoi4_clone::runtime::Province {
+        id: 1, owner: "FRA".into(), controller: "FRA".into(),
+        terrain: "plains".into(), neighbors: vec![20],
+    });
+    world.provinces.insert(20, hoi4_clone::runtime::Province {
+        id: 20, owner: "GER".into(), controller: "GER".into(),
+        terrain: "plains".into(), neighbors: vec![1],
+    });
+    // FRA 师: org很低(刚被打崩), 撤退到省20(GER驻军). 它会变攻方但打不过.
+    let fra = world.add_division(hoi4_clone::runtime::entities::Division {
+        owner_tag: "FRA".into(), location_province: 1,
+        destination: Some(20), origin_province: 1,
+        move_progress: 0.99, retreating: true,
+        max_org: 60.0, org: 5.0, // org很低, 一打就崩
+        max_strength: 20.0, strength: 20.0,
+        soft_attack: 5.0, defense: 10.0,
+        ..Default::default()
+    });
+    // GER 师: 强势守省20
+    let _ger = world.add_division(hoi4_clone::runtime::entities::Division {
+        owner_tag: "GER".into(), location_province: 20, origin_province: 20,
+        max_org: 60.0, org: 60.0, max_strength: 20.0, strength: 20.0,
+        soft_attack: 50.0, defense: 40.0,
+        ..Default::default()
+    });
+
+    // 第1步: FRA 到达省20 → pending + 清retreating
+    advance_movement(&mut world);
+    // 第2步: check_engagements → FRA 变攻方开战
+    check_engagements(&mut world);
+    assert!(!world.battles.is_empty(), "应开战");
+    let battle_started = world.battles.iter().any(|b| b.province == 20);
+    assert!(battle_started, "省20应有战斗(FRA变攻方)");
+
+    // 第3步: resolve → FRA org被打崩 → cleanup 攻方撤退 → 回origin(省1)
+    resolve_all_battles(&mut world);
+
+    // 核心: FRA 不应占领省20(它败了)
+    assert_eq!(
+        world.provinces.get(&20).unwrap().controller, "GER",
+        "FRA 战败, 省20 应仍属 GER"
+    );
+    // FRA 应存活(攻方撤退回 origin=省1, 非歼灭, 因省1是FRA己方)
+    let fra_div = world.divisions.get(&fra);
+    assert!(fra_div.is_some(), "FRA 战败应撤退保留(回origin省1), 不应歼灭");
+    let fra_div = fra_div.unwrap();
+    assert_eq!(fra_div.location_province, 1, "FRA 应回到 origin 省1");
+    assert!(fra_div.strength > 0.0, "FRA 应存活 str>0");
+}
