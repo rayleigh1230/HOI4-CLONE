@@ -9,6 +9,7 @@ impl GameClock {
     #[allow(clippy::manual_is_multiple_of)]
     pub fn tick(interp: &Interpreter, world: &mut World) {
         world.hour += 1;
+        world.started = true; // 首次 tick 后游戏开始(部署阶段结束)
         world.fire_event(interp, "on_hourly");
         crate::combat::movement::check_engagements(world); // 检查移动中师是否遇敌→开战
         crate::combat::movement::cancel_finished_supports(world); // 支援目标省战斗结束→清supporting

@@ -22,6 +22,9 @@ pub struct World {
     pub scope_stack: Vec<Scope>,
     pub next_division_id: u64,
     pub next_battle_id: u64,
+    /// 游戏是否已开始(首次 tick 后置 true)。
+    /// started=false 时(部署阶段), 同方向进攻师都进前线; started=true 后同 origin 后到的进预备队。
+    pub started: bool,
 }
 
 impl Default for World {
@@ -41,6 +44,7 @@ impl Default for World {
             scope_stack: vec![Scope::Root],
             next_division_id: 1,
             next_battle_id: 1,
+            started: false,
         }
     }
 }

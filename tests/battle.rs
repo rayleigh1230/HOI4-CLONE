@@ -984,7 +984,8 @@ fn support_attack_joins_existing_battle_without_moving() {
 
 #[test]
 fn support_attack_same_origin_goes_reserve() {
-    // 规则3: 同 origin 已有攻方师 → 支援师进预备队
+    // 规则3: 同 origin 已有攻方师 → 支援师进预备队(started=true 后才生效)
+    use hoi4_clone::runtime::GameClock;
     let mut reg = Registry::new();
     register_all(&mut reg);
     let interp = Interpreter::new(reg);
@@ -1008,7 +1009,9 @@ fn support_attack_same_origin_goes_reserve() {
         .map(|d| d.id).collect();
     // 第一个支援(同 origin 无其他支援师)→ 前线
     run_cmd(&mut world, &interp, &format!("support_attack = {{ division = {} target = 1 }}", sup_ids[0]));
-    // 第二个支援(同 origin 已有支援师)→ 预备队
+    // 推进让 started=true(部署阶段结束), 之后同 origin 才进预备队
+    GameClock::advance(&interp, &mut world, 1);
+    // 第二个支援(同 origin 已有支援师, started=true)→ 预备队
     run_cmd(&mut world, &interp, &format!("support_attack = {{ division = {} target = 1 }}", sup_ids[1]));
 
     let battle = &world.battles[0];
@@ -1381,4 +1384,69 @@ fn attacker_on_battle_province_can_retreat_to_friendly() {
     assert!(d.retreating, "战斗地块的攻方师下移动到己方省也应撤退(不分攻守)");
     assert_eq!(d.destination, Some(10), "撤退目标省10");
     assert_eq!(d.location_province, 1, "撤退中 location 不变");
+}
+
+// ===== 预备队判定时机: started 标志 =====
+
+#[test]
+fn before_started_same_origin_all_frontline() {
+    // 游戏未开始(started=false)时, 同出发地多个师进攻都进前线(不进预备队)
+    let mut reg = Registry::new();
+    register_all(&mut reg);
+    let interp = Interpreter::new(reg);
+    let mut world = setup_world();
+    // 2个GER师在省10(同origin), 进攻省1(FRA守)
+    run_setup(&mut world, &interp, r#"
+        _setup = {
+            create_division = { owner = FRA location = 1 soft_attack = 30 defense = 40 max_org = 60 }
+            create_division = { owner = GER location = 10 soft_attack = 30 defense = 40 max_org = 60 }
+            create_division = { owner = GER location = 10 soft_attack = 30 defense = 40 max_org = 60 }
+        }
+    "#);
+    let ger_ids: Vec<u64> = world.divisions.values()
+        .filter(|d| d.owner_tag == "GER").map(|d| d.id).collect();
+    // 未推进(started=false): 第一个进攻省1
+    run_cmd(&mut world, &interp, &format!("move_division = {{ division = {} target = 1 }}", ger_ids[0]));
+    // 第二个同 origin 进攻省1 — started=false 应进前线
+    run_cmd(&mut world, &interp, &format!("move_division = {{ division = {} target = 1 }}", ger_ids[1]));
+    let battle = world.battles.iter().find(|b| b.province == 1).unwrap();
+    assert!(
+        battle.attackers.contains(&ger_ids[0]) && battle.attackers.contains(&ger_ids[1]),
+        "started=false 时同 origin 两个师都应在前线, atk={:?} res={:?}",
+        battle.attackers, battle.reserve_attackers
+    );
+}
+
+#[test]
+fn after_started_same_origin_goes_reserve() {
+    // 游戏开始后(started=true), 同出发地后到的师进预备队
+    use hoi4_clone::runtime::GameClock;
+    let mut reg = Registry::new();
+    register_all(&mut reg);
+    let interp = Interpreter::new(reg);
+    let mut world = setup_world();
+    run_setup(&mut world, &interp, r#"
+        _setup = {
+            create_division = { owner = FRA location = 1 soft_attack = 30 defense = 40 max_org = 60 }
+            create_division = { owner = GER location = 10 soft_attack = 30 defense = 40 max_org = 60 }
+            create_division = { owner = GER location = 10 soft_attack = 30 defense = 40 max_org = 60 }
+        }
+    "#);
+    let ger_ids: Vec<u64> = world.divisions.values()
+        .filter(|d| d.owner_tag == "GER").map(|d| d.id).collect();
+    // 第一个进攻省1
+    run_cmd(&mut world, &interp, &format!("move_division = {{ division = {} target = 1 }}", ger_ids[0]));
+    // 推进 1 小时 → started 置 true
+    GameClock::advance(&interp, &mut world, 1);
+    // 第二个同 origin 进攻省1 — started=true 应进预备队
+    run_cmd(&mut world, &interp, &format!("move_division = {{ division = {} target = 1 }}", ger_ids[1]));
+    let battle = world.battles.iter().find(|b| b.province == 1).unwrap();
+    assert!(
+        battle.attackers.contains(&ger_ids[0]),
+        "第一个师应在前线, atk={:?}", battle.attackers
+    );
+    assert!(
+        battle.reserve_attackers.contains(&ger_ids[1]),
+        "started=true 后同 origin 后到的师应在预备队, res={:?}", battle.reserve_attackers
+    );
 }

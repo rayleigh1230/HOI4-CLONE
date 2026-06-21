@@ -27,7 +27,7 @@ fn join_as_attacker(world: &mut crate::runtime::World, div_id: u64, target: u32,
         // 加入已有战斗: 判定进前线还是预备队
         // 规则: 同出发地(from_prov)已有师在攻该目标 → 后到的进预备队(时间线落后)
         //       不同出发地 → 直接前线(新方向); 再检查宽度: 超宽也进预备队
-        let same_origin_exists = world.battles[bidx].attackers.iter()
+        let same_origin_exists = world.started && world.battles[bidx].attackers.iter()
             .chain(world.battles[bidx].reserve_attackers.iter())
             .any(|aid| world.divisions.get(aid)
                 .map(|d| d.origin_province == from_prov)
