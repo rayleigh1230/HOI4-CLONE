@@ -78,6 +78,9 @@
   #orderMenu button { display: block; width: 100%; text-align: left; background: transparent; color: #e0e0e0; border: none; padding: 10px 14px; border-radius: 4px; cursor: pointer; font-size: 13px; margin: 2px 0; min-height: 40px; }
   #orderMenu button:hover { background: #0f3460; }
   #orderMenu button.cancel { color: #888; }
+  /* 师卡片上的停止按钮(仅有主动指令时显示) */
+  .stop-btn { background: #555; color: #fff; border: none; padding: 2px 8px; border-radius: 3px; font-size: 10px; cursor: pointer; margin-left: 6px; min-height: 0; }
+  .stop-btn:hover { background: #c81e45; }
 </style>
 </head>
 <body>
@@ -353,6 +356,7 @@ function refresh() {
     else if (d.attacking) status = '⚔️ 进攻→' + d.dest;
     else if (d.retreating && d.dest) status = '🚩 撤退→' + d.dest;
     else if (d.dest) status = '🚶 移动→' + d.dest;
+    else if (d.supporting) status = '🎯 支援→' + d.supporting;
     else if (d.retreating) status = '🔄 恢复中';
     else if (d.org <= 0) status = '⚠️ 破阵';
     else status = '🛡️ 驻扎';
@@ -364,6 +368,9 @@ function refresh() {
       refresh();
     };
     card.className = 'div-card ' + (d.owner === 'GER' ? 'attacker' : 'defender') + (d.annihilated || d.retreating ? ' broken' : '');
+    // 停止按钮: 仅有主动指令(进军/移动/支援)且非撤退时显示
+    const canStop = !d.retreating && (d.dest || d.supporting);
+    const stopBtn = canStop ? `<button class="stop-btn" data-stop="${d.id}">⏹停止</button>` : '';
     const orgPct = d.max_org > 0 ? (d.org / d.max_org * 100) : 0;
     const strPct = d.max_str > 0 ? (d.str / d.max_str * 100) : 0;
     const eqPct = (d.eq_ratio || 1) * 100;
@@ -371,7 +378,7 @@ function refresh() {
     card.innerHTML = `
       <div class="div-head">
         <span class="div-owner">${d.owner} 师 #${d.id} 📍${d.loc}${d.dest ? '→'+d.dest : ''}</span>
-        <span class="div-status">${status}</span>
+        <span class="div-status">${status}${stopBtn}</span>
       </div>
       <div class="bar-row">
         <span class="bar-label">组织</span>
@@ -395,6 +402,18 @@ function refresh() {
       </div>`;
     container.appendChild(card);
   }
+  // 停止按钮点击: 调 engine_stop_order(阻止冒泡到卡片选中)
+  container.querySelectorAll('.stop-btn').forEach(btn => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const id = parseInt(btn.dataset.stop, 10);
+      try {
+        wasm.exports.engine_stop_order(id);
+        log(`师#${id} 停止行动`);
+      } catch (err) { log('⚠️ 停止失败: ' + err.message); }
+      refresh();
+    };
+  });
   drawMap();
 }
 

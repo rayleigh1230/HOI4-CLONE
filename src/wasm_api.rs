@@ -113,6 +113,20 @@ pub extern "C" fn engine_support_attack(division_id: u32, target: u32) {
     });
 }
 
+/// 停止师的主动行动(进军/移动/支援); 保留被动防守和撤退
+#[no_mangle]
+pub extern "C" fn engine_stop_order(division_id: u32) {
+    ENGINE.with(|e| {
+        let mut e = e.borrow_mut();
+        let Engine { interp, world } = &mut *e;
+        let script = format!("stop_order = {{ division = {division_id} }}");
+        if let Ok(b) = crate::parser::parse(&script) {
+            let effs = crate::ast::lower::lower_effects(&b);
+            interp.run(&effs, world);
+        }
+    });
+}
+
 /// 部署师到指定省(前端交互式部署)
 #[no_mangle]
 pub unsafe extern "C" fn engine_deploy_division(

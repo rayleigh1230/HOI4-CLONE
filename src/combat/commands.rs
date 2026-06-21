@@ -299,6 +299,42 @@ pub fn register(reg: &mut Registry) {
         Ok(())
     });
 
+    // 停止命令: 取消师当前主动发起的行动(进军/移动/支援), 保留被动防守和撤退。
+    // 规则:
+    // - retreating=true → 完全忽略(撤退不能停, 哪怕有 destination)
+    // - 有 destination 或 supporting → 可停止:
+    //   清 destination/attacking/move_progress/pending_arrival/supporting
+    //   从主动参与的战斗 attackers/reserve_attackers 移除
+    // - 不动 defenders/reserve_defenders(被动防守继续)
+    // - 无 destination/supporting(纯防守/撤退变攻方)→ 忽略(无主动指令可停)
+    reg.register("stop_order", |w, p| {
+        let div_id = num_of(np(p, "stop_order", "division")?)? as u64;
+        // 读取判断(单独作用域, 释放借用后再 get_mut)
+        let should_stop = {
+            let Some(d) = w.divisions.get(&div_id) else { return Ok(()); };
+            // 撤退中 → 忽略(撤退是战败的被动结果, 不能停)
+            if d.retreating { return Ok(()); }
+            // 无主动指令(destination/supporting 都没)→ 忽略
+            d.destination.is_some() || d.supporting.is_some()
+        };
+        if !should_stop { return Ok(()); }
+        // 清主动行动状态
+        if let Some(d) = w.divisions.get_mut(&div_id) {
+            d.destination = None;
+            d.attacking = false;
+            d.move_progress = 0.0;
+            d.pending_arrival = None;
+            d.supporting = None;
+        }
+        // 从所有战斗的"攻方"角色移除(保留守方角色 = 被动防守)
+        for b in w.battles.iter_mut() {
+            b.attackers.retain(|&id| id != div_id);
+            b.reserve_attackers.retain(|&id| id != div_id);
+            // 不动 defenders / reserve_defenders(被动防守)
+        }
+        Ok(())
+    });
+
     // trigger: 当前作用域师是否破阵
     reg.register_trigger("is_broken", |w, _p| {
         if let Some(did) = w.current_scope().division_id() {

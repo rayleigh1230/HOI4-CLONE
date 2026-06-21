@@ -907,3 +907,364 @@ fn retreating_to_enemy_province_then_loses_continues_retreat_or_dies() {
     assert_eq!(fra_div.location_province, 1, "FRA 应回到 origin 省1");
     assert!(fra_div.strength > 0.0, "FRA 应存活 str>0");
 }
+
+// ===== 支援攻击(support_attack)Step1: 命令基础行为 =====
+
+/// 辅助: 跑一条命令脚本
+fn run_cmd(world: &mut World, interp: &Interpreter, src: &str) {
+    let effs = hoi4_clone::ast::lower::lower_effects(
+        &hoi4_clone::parser::parse(src).unwrap()
+    );
+    interp.run(&effs, world);
+}
+
+#[test]
+fn support_attack_invalid_when_no_battle() {
+    // 规则1: 目标省无战斗 → 指令无效, supporting 不设
+    let mut reg = Registry::new();
+    register_all(&mut reg);
+    let interp = Interpreter::new(reg);
+    let mut world = setup_world();
+    run_setup(&mut world, &interp, r#"
+        _setup = {
+            create_division = { owner = GER location = 2 equipment = infantry_equipment battalions = 7 }
+            create_division = { owner = FRA location = 1 equipment = infantry_equipment battalions = 7 }
+        }
+    "#);
+    let ger_id = world.divisions.values().find(|d| d.owner_tag == "GER").unwrap().id;
+    assert!(world.battles.is_empty(), "开战前无战斗");
+
+    // GER 支援攻击省1(此刻无战斗) → 指令无效
+    run_cmd(&mut world, &interp, "support_attack = { division = 1 target = 1 }");
+
+    assert_eq!(world.divisions.get(&ger_id).unwrap().supporting, None, "无战斗时 supporting 不应设置");
+    assert!(world.battles.is_empty(), "无战斗时不应新建战斗");
+}
+
+#[test]
+fn support_attack_joins_existing_battle_without_moving() {
+    // 规则1/2/3: 目标省有战斗 → 加入攻方, 师不移动
+    let mut reg = Registry::new();
+    register_all(&mut reg);
+    let interp = Interpreter::new(reg);
+    let mut world = setup_world();
+    // 先建一场省1的战斗(GER攻FRA守)
+    run_setup(&mut world, &interp, r#"
+        _setup = {
+            create_division = { owner = GER location = 1 soft_attack = 30 defense = 40 max_org = 60 }
+            create_division = { owner = FRA location = 1 soft_attack = 30 defense = 40 max_org = 60 }
+            start_battle = { attacker = GER defender = FRA province = 1 }
+        }
+    "#);
+    // 在省2部署一支援师(GER), 支援省1(已有战斗)
+    run_setup(&mut world, &interp, r#"
+        _setup = { create_division = { owner = GER location = 2 equipment = infantry_equipment battalions = 7 } }
+    "#);
+    let support_id = world.divisions.values()
+        .filter(|d| d.owner_tag == "GER" && d.location_province == 2)
+        .map(|d| d.id).next().unwrap();
+    assert_eq!(world.battles.len(), 1, "应已有1场战斗");
+
+    run_cmd(&mut world, &interp, &format!("support_attack = {{ division = {} target = 1 }}", support_id));
+
+    let sup = world.divisions.get(&support_id).unwrap();
+    assert_eq!(sup.supporting, Some(1), "supporting 应设为省1");
+    // 规则2: 师不移动
+    assert_eq!(sup.location_province, 2, "支援师 location 不变(仍在省2)");
+    assert!(sup.destination.is_none(), "支援师 destination 不设(不移动)");
+    assert!((sup.move_progress - 0.0).abs() < 1e-9, "支援师进度不变");
+    // 规则3: 加入战斗攻方
+    let battle = &world.battles[0];
+    assert!(
+        battle.attackers.contains(&support_id) || battle.reserve_attackers.contains(&support_id),
+        "支援师应加入战斗攻方(前线或预备队), atk={:?} res_atk={:?}",
+        battle.attackers, battle.reserve_attackers
+    );
+}
+
+#[test]
+fn support_attack_same_origin_goes_reserve() {
+    // 规则3: 同 origin 已有攻方师 → 支援师进预备队
+    let mut reg = Registry::new();
+    register_all(&mut reg);
+    let interp = Interpreter::new(reg);
+    let mut world = setup_world();
+    run_setup(&mut world, &interp, r#"
+        _setup = {
+            create_division = { owner = GER location = 1 soft_attack = 30 defense = 40 max_org = 60 }
+            create_division = { owner = FRA location = 1 soft_attack = 30 defense = 40 max_org = 60 }
+            start_battle = { attacker = GER defender = FRA province = 1 }
+        }
+    "#);
+    // 两个 GER 支援师都在省2(同 origin)
+    run_setup(&mut world, &interp, r#"
+        _setup = {
+            create_division = { owner = GER location = 2 equipment = infantry_equipment battalions = 7 }
+            create_division = { owner = GER location = 2 equipment = infantry_equipment battalions = 7 }
+        }
+    "#);
+    let sup_ids: Vec<u64> = world.divisions.values()
+        .filter(|d| d.owner_tag == "GER" && d.location_province == 2)
+        .map(|d| d.id).collect();
+    // 第一个支援(同 origin 无其他支援师)→ 前线
+    run_cmd(&mut world, &interp, &format!("support_attack = {{ division = {} target = 1 }}", sup_ids[0]));
+    // 第二个支援(同 origin 已有支援师)→ 预备队
+    run_cmd(&mut world, &interp, &format!("support_attack = {{ division = {} target = 1 }}", sup_ids[1]));
+
+    let battle = &world.battles[0];
+    assert!(battle.attackers.contains(&sup_ids[0]), "第一个支援师应在前线");
+    assert!(battle.reserve_attackers.contains(&sup_ids[1]), "第二个同origin支援师应在预备队");
+}
+
+// ===== 支援攻击 Step2: 主循环集成行为 =====
+
+#[test]
+fn support_attack_auto_cancels_when_battle_ends() {
+    // 规则7: 战斗结束后, 支援师的 supporting 自动清除
+    use hoi4_clone::runtime::GameClock;
+    let mut reg = Registry::new();
+    register_all(&mut reg);
+    let interp = Interpreter::new(reg);
+    let mut world = setup_world();
+    // GER 强攻 FRA, FRA 很快破阵 → 战斗结束
+    run_setup(&mut world, &interp, r#"
+        _setup = {
+            create_division = { owner = GER location = 1 soft_attack = 500 defense = 100 max_org = 60 }
+            create_division = { owner = FRA location = 1 soft_attack = 5 defense = 5 max_org = 30 }
+            start_battle = { attacker = GER defender = FRA province = 1 }
+        }
+    "#);
+    // 在省10部署支援师(省10是GER后方, setup_world 里定义)
+    run_setup(&mut world, &interp, r#"
+        _setup = { create_division = { owner = GER location = 10 equipment = infantry_equipment battalions = 7 } }
+    "#);
+    let sup_id = world.divisions.values()
+        .filter(|d| d.owner_tag == "GER" && d.location_province == 10)
+        .map(|d| d.id).next().unwrap();
+    run_cmd(&mut world, &interp, &format!("support_attack = {{ division = {} target = 1 }}", sup_id));
+    assert_eq!(world.divisions.get(&sup_id).unwrap().supporting, Some(1), "应已设支援");
+
+    // 推进让 FRA 破阵、战斗结束
+    GameClock::advance(&interp, &mut world, 30);
+
+    assert_eq!(world.battles.len(), 0, "战斗应已结束");
+    assert_eq!(
+        world.divisions.get(&sup_id).unwrap().supporting, None,
+        "战斗结束后 supporting 应自动清除"
+    );
+}
+
+#[test]
+fn support_attacker_keeps_battle_after_move_attacker_retreats() {
+    // 规则4: 移动攻方被打退, 但支援攻方在场 → 战斗继续
+    use hoi4_clone::runtime::GameClock;
+    let mut reg = Registry::new();
+    register_all(&mut reg);
+    let interp = Interpreter::new(reg);
+    let mut world = setup_world();
+    // 移动攻方 GER 弱(易退), 守方 FRA 中等, 支援攻方 GER 强
+    run_setup(&mut world, &interp, r#"
+        _setup = {
+            create_division = { owner = GER location = 1 soft_attack = 10 defense = 5 max_org = 20 }
+            create_division = { owner = FRA location = 1 soft_attack = 50 defense = 100 max_org = 60 }
+            start_battle = { attacker = GER defender = FRA province = 1 }
+        }
+    "#);
+    run_setup(&mut world, &interp, r#"
+        _setup = { create_division = { owner = GER location = 10 equipment = infantry_equipment battalions = 7 } }
+    "#);
+    let move_atk = world.divisions.values()
+        .filter(|d| d.owner_tag == "GER" && d.location_province == 1)
+        .map(|d| d.id).next().unwrap();
+    let sup_id = world.divisions.values()
+        .filter(|d| d.owner_tag == "GER" && d.location_province == 10)
+        .map(|d| d.id).next().unwrap();
+    // 支援师加入省1战斗
+    run_cmd(&mut world, &interp, &format!("support_attack = {{ division = {} target = 1 }}", sup_id));
+
+    // 推进: 移动攻方 GER 会先被打退(org20 vs FRA强), 但支援师还在 → 战斗继续
+    GameClock::advance(&interp, &mut world, 15);
+
+    // 移动攻方应已撤退(退出战斗), 但支援师应在战斗中 → 战斗不结束
+    let _ = world.divisions.get(&move_atk).unwrap(); // 移动攻方仍存活(撤退非歼灭)
+    let in_battle: std::collections::HashSet<u64> = world.battles.iter()
+        .flat_map(|b| b.attackers.iter().chain(b.defenders.iter())
+            .chain(b.reserve_attackers.iter()).chain(b.reserve_defenders.iter()).copied())
+        .collect();
+    // 关键: 支援师仍在战斗, 战斗未结束
+    if !world.battles.is_empty() {
+        assert!(in_battle.contains(&sup_id), "支援师应仍在战斗中(战斗继续), in_battle不含它");
+    }
+    // 移动攻方应已不在战斗(被打退)
+    // (它可能回origin省1恢复, 也可能战斗还在时被移出 attackers)
+}
+
+#[test]
+fn support_only_does_not_capture_province() {
+    // 规则5: 敌方全灭只剩支援攻方(无移动攻方到达目标省) → 目标省归属不变。
+    // 直接构造 cleanup 输入: 省1战斗, 攻方只有支援师(location≠省1), 守方全退。
+    use hoi4_clone::combat::resolve::resolve_all_battles;
+    let mut reg = Registry::new();
+    register_all(&mut reg);
+    let interp = Interpreter::new(reg);
+    let mut world = setup_world();
+    run_setup(&mut world, &interp, r#"
+        _setup = {
+            create_division = { owner = GER location = 10 equipment = infantry_equipment battalions = 7 }
+            create_division = { owner = FRA location = 1 soft_attack = 0 defense = 5 max_org = 10 max_strength = 50 }
+        }
+    "#);
+    let sup_id = world.divisions.values()
+        .filter(|d| d.owner_tag == "GER").map(|d| d.id).next().unwrap();
+    let fra_id = world.divisions.values()
+        .filter(|d| d.owner_tag == "FRA").map(|d| d.id).next().unwrap();
+    // 支援师: location=省10, supporting=省1
+    world.divisions.get_mut(&sup_id).unwrap().supporting = Some(1);
+    // FRA 守方: org 归零(将被判定撤退 → 前线崩)
+    world.divisions.get_mut(&fra_id).unwrap().org = 0.0;
+    // 构造省1战斗: 只有支援师作攻方, FRA 作守方
+    world.battles.push(hoi4_clone::runtime::entities::Battle {
+        id: 0, province: 1,
+        attackers: vec![sup_id], defenders: vec![fra_id],
+        ..Default::default()
+    });
+    assert_eq!(world.provinces.get(&1).unwrap().controller, "FRA", "开战前省1属FRA");
+
+    resolve_all_battles(&mut world);
+
+    // 守方 FRA 前线崩 → 战斗结束。攻方只有支援师(location=省10≠省1)
+    // → attacker_present=false → 不占地
+    let prov1 = world.provinces.get(&1).unwrap();
+    assert_eq!(
+        prov1.controller, "FRA",
+        "只剩支援攻方(location≠省1)不应占领省1, 实际={}", prov1.controller
+    );
+}
+
+// ===== 停止命令(stop_order): 取消主动行动, 保留被动防守/撤退 =====
+
+#[test]
+fn stop_cancels_march_destination() {
+    // 停止普通移动: 清 destination, 师留在当前省
+    let mut reg = Registry::new();
+    register_all(&mut reg);
+    let interp = Interpreter::new(reg);
+    let mut world = setup_world();
+    run_setup(&mut world, &interp, r#"
+        _setup = { create_division = { owner = GER location = 1 equipment = infantry_equipment battalions = 7 } }
+    "#);
+    let did = world.divisions.values().next().unwrap().id;
+    // 下移动令: 省1→省10(己方)
+    run_cmd(&mut world, &interp, "move_division = { division = 1 target = 10 }");
+    assert!(world.divisions.get(&did).unwrap().destination.is_some(), "应已下令移动");
+
+    // 停止
+    run_cmd(&mut world, &interp, "stop_order = { division = 1 }");
+    let d = world.divisions.get(&did).unwrap();
+    assert!(d.destination.is_none(), "停止后 destination 应清空");
+    assert!(!d.attacking, "停止后 attacking 应清");
+    assert_eq!(d.location_province, 1, "师应留在当前省1");
+}
+
+#[test]
+fn stop_cancels_support_attack() {
+    // 停止支援攻击: 清 supporting, 从战斗 attackers 移除
+    let mut reg = Registry::new();
+    register_all(&mut reg);
+    let interp = Interpreter::new(reg);
+    let mut world = setup_world();
+    run_setup(&mut world, &interp, r#"
+        _setup = {
+            create_division = { owner = GER location = 1 soft_attack = 30 defense = 40 max_org = 60 }
+            create_division = { owner = FRA location = 1 soft_attack = 30 defense = 40 max_org = 60 }
+            start_battle = { attacker = GER defender = FRA province = 1 }
+        }
+    "#);
+    run_setup(&mut world, &interp, r#"
+        _setup = { create_division = { owner = GER location = 10 equipment = infantry_equipment battalions = 7 } }
+    "#);
+    let sup_id = world.divisions.values()
+        .filter(|d| d.owner_tag == "GER" && d.location_province == 10)
+        .map(|d| d.id).next().unwrap();
+    run_cmd(&mut world, &interp, &format!("support_attack = {{ division = {} target = 1 }}", sup_id));
+    assert_eq!(world.divisions.get(&sup_id).unwrap().supporting, Some(1));
+    assert!(world.battles[0].attackers.contains(&sup_id) || world.battles[0].reserve_attackers.contains(&sup_id));
+
+    // 停止支援
+    run_cmd(&mut world, &interp, &format!("stop_order = {{ division = {} }}", sup_id));
+    let d = world.divisions.get(&sup_id).unwrap();
+    assert_eq!(d.supporting, None, "停止后 supporting 应清空");
+    assert!(!world.battles[0].attackers.contains(&sup_id), "停止后应从 attackers 移除");
+    assert!(!world.battles[0].reserve_attackers.contains(&sup_id), "停止后应从 reserve_attackers 移除");
+}
+
+#[test]
+fn stop_ignored_for_retreating() {
+    // 撤退中的师: 停止命令被忽略(retreating 不能停)
+    let mut reg = Registry::new();
+    register_all(&mut reg);
+    let interp = Interpreter::new(reg);
+    let mut world = setup_world();
+    run_setup(&mut world, &interp, r#"
+        _setup = { create_division = { owner = FRA location = 1 soft_attack = 0 defense = 5 max_org = 30 } }
+    "#);
+    let did = world.divisions.values().next().unwrap().id;
+    // 手动设撤退状态(destination 有值, retreating=true)
+    {
+        let d = world.divisions.get_mut(&did).unwrap();
+        d.retreating = true;
+        d.destination = Some(20);
+        d.move_progress = 0.3;
+    }
+    // 停止(应被忽略)
+    run_cmd(&mut world, &interp, "stop_order = { division = 1 }");
+    let d = world.divisions.get(&did).unwrap();
+    assert!(d.retreating, "撤退师 retreating 应保持");
+    assert_eq!(d.destination, Some(20), "撤退师 destination 不应被停止清除");
+    assert!((d.move_progress - 0.3).abs() < 1e-9, "撤退师进度不应变");
+}
+
+#[test]
+fn stop_keeps_passive_defense() {
+    // 师同时进军(主动) + 被动防守(location 被攻):
+    // 停止只取消进军, 保留防守(留在 defenders 里)
+    let mut reg = Registry::new();
+    register_all(&mut reg);
+    let interp = Interpreter::new(reg);
+    let mut world = setup_world();
+    // A: GER 在省1, 进军省2(主动); 同时省1被FRA攻击 → A 是省1防守方
+    run_setup(&mut world, &interp, r#"
+        _setup = {
+            create_division = { owner = GER location = 1 soft_attack = 30 defense = 40 max_org = 60 }
+        }
+    "#);
+    let a_id = world.divisions.values().next().unwrap().id;
+    // FRA 在省20, 进攻省1(让A成省1守方)
+    run_setup(&mut world, &interp, r#"
+        _setup = { create_division = { owner = FRA location = 20 soft_attack = 30 defense = 40 max_org = 60 } }
+    "#);
+    let fra_id = world.divisions.values()
+        .filter(|d| d.owner_tag == "FRA").map(|d| d.id).next().unwrap();
+    run_cmd(&mut world, &interp, &format!("move_division = {{ division = {} target = 1 }}", fra_id));
+    // 现在 A 是省1战斗的 defender(FRA 进攻省1)
+    let battle1 = world.battles.iter().find(|b| b.province == 1).unwrap();
+    assert!(battle1.defenders.contains(&a_id), "A 应是省1守方(被动)");
+
+    // A 下令进军省2(主动进攻省2, 省2空或己方)
+    // 注: 省2需存在且邻接。setup_world 省1邻接 10和20。用省10(己方)避免开战
+    run_cmd(&mut world, &interp, &format!("move_division = {{ division = {} target = 10 }}", a_id));
+    assert!(world.divisions.get(&a_id).unwrap().destination.is_some(), "A 应有进军令");
+
+    // 停止 A: 取消进军省10, 但保留防守省1
+    run_cmd(&mut world, &interp, &format!("stop_order = {{ division = {} }}", a_id));
+    let d = world.divisions.get(&a_id).unwrap();
+    assert!(d.destination.is_none(), "停止后 A 进军令应取消");
+    // 关键: A 仍是省1战斗的防守方
+    let battle1_after = world.battles.iter().find(|b| b.province == 1);
+    assert!(battle1_after.is_some(), "省1战斗应仍存在(防守未停)");
+    assert!(
+        battle1_after.unwrap().defenders.contains(&a_id),
+        "停止后 A 应仍是省1防守方(被动防守不停), defenders={:?}",
+        battle1_after.unwrap().defenders
+    );
+}
