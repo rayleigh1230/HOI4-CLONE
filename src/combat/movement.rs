@@ -82,11 +82,12 @@ mod tests {
             ..Default::default()
         };
         let did = w.add_division(d);
-        for _ in 0..4 {
+        // MOVE_RATE=0.05, 19次=95%, 第20次到达
+        for _ in 0..19 {
             advance_movement(&mut w);
         }
-        assert!((w.divisions.get(&did).unwrap().move_progress - 0.8).abs() < 1e-9);
-        assert_eq!(w.divisions.get(&did).unwrap().location_province, 1);
+        assert!((w.divisions.get(&did).unwrap().move_progress - 0.95).abs() < 1e-9);
+        assert_eq!(w.divisions.get(&did).unwrap().location_province, 1, "未到不应换省");
         advance_movement(&mut w);
         assert_eq!(w.divisions.get(&did).unwrap().location_province, 2);
         assert!(w.divisions.get(&did).unwrap().destination.is_none());
