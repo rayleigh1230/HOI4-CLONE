@@ -204,9 +204,9 @@ pub fn register(reg: &mut Registry) {
         let owner = w.divisions.get(&div_id)
             .ok_or_else(|| CmdError::RuntimeError(format!("move_division: 师 {div_id} 不存在")))?
             .owner_tag.clone();
-        // 查目标省有无敌军(非己方的师)
+        // 查目标省有无敌军(非己方的师; 排除撤退师 — 撤退师不当守方被重新拉入战斗)
         let enemies: Vec<u64> = w.divisions.values()
-            .filter(|d| d.location_province == target && d.owner_tag != owner)
+            .filter(|d| d.location_province == target && d.owner_tag != owner && !d.retreating)
             .map(|d| d.id)
             .collect();
         // 进军判定: 目标省非己方控制 → 进军红箭头(无论有无敌军)

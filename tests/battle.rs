@@ -719,3 +719,75 @@ fn routed_reserve_keeps_org() {
         "带溃师 org 应保持(非归零): 实际 {}", routed.org
     );
 }
+
+#[test]
+fn retreating_division_not_reengaged_by_check_engagements() {
+    // 回归 bug: 撤退师 location 仍在战场省, 被 check_engagements 每tick重新拉入战斗,
+    // 导致 org 归零后 str 持续下降直至歼灭(用户报告的"组织度掉完还在掉装备HP")。
+    // 场景: GER move 进攻省1, FRA 守省1。FRA 撤退撤向省3, 但 location 仍=省1。
+    //       GER 的 destination=省1, 每 tick check_engagements 查省1敌军→重拉 FRA。
+    // 修复后: retreating 师不被 check_engagements 当作守方, FRA 撤退后 str 应停止下降。
+    use hoi4_clone::runtime::GameClock;
+    let mut reg = Registry::new();
+    register_all(&mut reg);
+    let interp = Interpreter::new(reg);
+    let mut world = World::new();
+    world.player_tag = "GER".into();
+    world.countries.insert("GER".into(), Default::default());
+    world.countries.insert("FRA".into(), Default::default());
+    // UI 默认布局: 省1(FRA) 邻省2(GER)和省3(FRA, 撤退目标)
+    world.provinces.insert(1, hoi4_clone::runtime::Province {
+        id: 1, owner: "FRA".into(), controller: "FRA".into(),
+        terrain: "plains".into(), neighbors: vec![2, 3],
+    });
+    world.provinces.insert(2, hoi4_clone::runtime::Province {
+        id: 2, owner: "GER".into(), controller: "GER".into(),
+        terrain: "plains".into(), neighbors: vec![1],
+    });
+    world.provinces.insert(3, hoi4_clone::runtime::Province {
+        id: 3, owner: "FRA".into(), controller: "FRA".into(),
+        terrain: "plains".into(), neighbors: vec![1],
+    });
+    run_setup(&mut world, &interp, r#"
+        _setup = {
+            create_division = { owner = GER location = 2 equipment = medium_tank battalions = 7 }
+            create_division = { owner = FRA location = 1 equipment = infantry_equipment battalions = 7 }
+        }
+    "#);
+    let fra_id = world.divisions.values().find(|d| d.owner_tag == "FRA").unwrap().id;
+    // GER 进攻省1
+    let move_effs = hoi4_clone::ast::lower::lower_effects(
+        &hoi4_clone::parser::parse("move_division = { division = 1 target = 1 }").unwrap()
+    );
+    interp.run(&move_effs, &mut world);
+
+    // 推进到 FRA 撤退(org 归零), 记录撤退瞬间的 str
+    let mut str_when_retreat_started: Option<f64> = None;
+    for h in 1..=120 {
+        GameClock::tick(&interp, &mut world);
+        let fra = world.divisions.get(&fra_id);
+        if fra.is_none() {
+            panic!("FRA 被歼灭删除于 tick {h} — 撤退师不应被歼灭(回归 bug 复现)");
+        }
+        let fra = fra.unwrap();
+        if str_when_retreat_started.is_none() && fra.retreating {
+            str_when_retreat_started = Some(fra.strength);
+            eprintln!("tick {h}: FRA 开始撤退, str={:.1}", fra.strength);
+        }
+    }
+
+    // 最终: FRA 应存活(撤退保留非歼灭)
+    assert!(world.divisions.contains_key(&fra_id), "撤退师应保留, 不应被歼灭");
+    let fra_final = world.divisions.get(&fra_id).unwrap();
+    assert!(fra_final.strength > 0.0, "撤退师 str 应有余, 不应归零: {}", fra_final.strength);
+    // 关键: 撤退开始后 str 不应大幅下降(撤退师不挨打)
+    // 给一定容差(撤退过程可能再挨1-2tick), 但不应从~130掉到歼灭
+    if let Some(s0) = str_when_retreat_started {
+        let drop = s0 - fra_final.strength;
+        assert!(
+            drop < 20.0,
+            "撤退后 str 不应大幅下降: 开始={s0} 最终={} 下降={drop:.1}",
+            fra_final.strength
+        );
+    }
+}

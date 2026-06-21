@@ -16,10 +16,15 @@ const ORG_LOSS_ON_CONQUER: f64 = 0.2;
 
 /// 每小时检查: 移动中的师, 目标地块出现敌军 → 立刻开战
 /// (交战由"地块有无敌军"决定, 非到达决定)
+///
+/// 重要: 撤退中(retreating)的师被完全忽略 — 不当攻方也不当守方。
+/// 撤退师 location 仍可能在战场省(行军未到达撤退目标), 若不过滤会被每 tick
+/// 重新拉入战斗, 导致 org 归零后 str 持续下降直至歼灭(用户报告的 bug)。
 pub fn check_engagements(world: &mut World) {
-    // 收集需要检查的师 (id, dest, owner)
+    // 收集需要检查的师 (id, dest, owner) — 跳过撤退师(撤退 = 强制脱离战斗)
     let moving: Vec<(u64, u32, String)> = world.divisions.iter()
         .filter_map(|(id, d)| {
+            if d.retreating { return None; } // 撤退师不主动开战
             d.destination.map(|dest| (*id, dest, d.owner_tag.clone()))
         })
         .collect();
@@ -33,9 +38,10 @@ pub fn check_engagements(world: &mut World) {
         if in_battle.contains(&div_id) {
             continue; // 已在战斗中
         }
-        // 查目标地块有无敌军师
+        // 查目标地块有无敌军师 — 排除撤退师(撤退师不当守方被重新拉入)
         let enemies: Vec<u64> = world.divisions.values()
-            .filter(|od| od.location_province == dest && od.owner_tag != owner && !od.is_annihilated())
+            .filter(|od| od.location_province == dest && od.owner_tag != owner
+                && !od.is_annihilated() && !od.retreating)
             .map(|od| od.id)
             .collect();
         if enemies.is_empty() {
