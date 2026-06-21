@@ -248,11 +248,12 @@ fn serialize_state(world: &World) -> String {
         }
         first = false;
         s.push_str(&format!(
-            "{{\"id\":{},\"owner\":\"{}\",\"org\":{:.1},\"max_org\":{:.0},\"str\":{:.1},\"max_str\":{:.0},\"eq_ratio\":{:.2},\"mp_ratio\":{:.2},\"loc\":{},\"dest\":{},\"attacking\":{},\"retreating\":{},\"annihilated\":{}}}",
+            "{{\"id\":{},\"owner\":\"{}\",\"org\":{:.1},\"max_org\":{:.0},\"str\":{:.1},\"max_str\":{:.0},\"eq_ratio\":{:.2},\"mp_ratio\":{:.2},\"loc\":{},\"dest\":{},\"pending\":{},\"attacking\":{},\"retreating\":{},\"annihilated\":{}}}",
             d.id, d.owner_tag, d.org, d.max_org, d.strength, d.max_strength,
             d.equipment_ratio_only(), d.manpower_ratio(),
             d.location_province,
             d.destination.unwrap_or(0),
+            d.pending_arrival.unwrap_or(0),
             d.attacking, d.retreating, d.is_annihilated()
         ));
     }

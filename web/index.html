@@ -426,7 +426,7 @@ function drawMap() {
     }
   });
 
-  // 部队图标(按 location 定位; 移动中画箭头到目标)
+  // 部队图标(按 location=归属地 定位; 进攻别处时图标不移动, 只画箭头到目标)
   state.divisions.forEach(d => {
     const bx = pos[d.loc] ? pos[d.loc].x : 0;
     const by = pos[d.loc] ? pos[d.loc].y : 0;
@@ -444,6 +444,14 @@ function drawMap() {
       ctx.lineTo(tx - 8 * Math.cos(ang - 0.4), ty - 8 * Math.sin(ang - 0.4));
       ctx.lineTo(tx - 8 * Math.cos(ang + 0.4), ty - 8 * Math.sin(ang + 0.4));
       ctx.closePath(); ctx.fill();
+    }
+    // pending_arrival: 进度满但等战斗胜 → 画虚线红箭头(表示"已到前线, 待占领")
+    if (d.pending && pos[d.pending]) {
+      const tx = pos[d.pending].x, ty = pos[d.pending].y;
+      ctx.strokeStyle = '#e94560';
+      ctx.lineWidth = 2; ctx.setLineDash([4, 3]);
+      ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(tx, ty); ctx.stroke();
+      ctx.setLineDash([]); // 恢复实线
     }
     const color = TAG_COLORS[d.owner] || '#fff';
     ctx.fillStyle = d.annihilated ? '#444' : color;
