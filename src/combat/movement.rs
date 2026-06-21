@@ -47,23 +47,42 @@ pub fn advance_movement(world: &mut World) {
             }
         }
     }
-    // 第二阶段: 处理到达后的占领(此时无 divisions 可变借用冲突)
+    // 第二阶段: 到达后处理(此时无 divisions 可变借用冲突)
     for a in arrivals {
-        if !a.was_attacking {
-            continue;
+        // 检查该省有无敌军师(对方可能同时到达)
+        let enemies: Vec<u64> = world.divisions.values()
+            .filter(|od| od.location_province == a.dest && od.owner_tag != a.owner && !od.is_annihilated())
+            .map(|od| od.id)
+            .collect();
+        if !enemies.is_empty() {
+            // 到达遇敌 → 开战(若该省已有战斗则加入)
+            let existing = world.battles.iter().position(|b| b.province == a.dest);
+            if let Some(bidx) = existing {
+                // 加入已有战斗
+                if !world.battles[bidx].attackers.contains(&a.id) {
+                    world.battles[bidx].attackers.push(a.id);
+                }
+            } else {
+                // 新建战斗
+                let bid = world.next_battle_id;
+                world.next_battle_id += 1;
+                world.battles.push(crate::runtime::entities::Battle {
+                    id: bid, province: a.dest,
+                    attackers: vec![a.id], defenders: enemies,
+                    ..Default::default()
+                });
+            }
+            continue; // 有敌军, 不占领
         }
-        // 占领条件: 该省无敌军师(守方已败/撤走) + 战斗打完
-        let enemies_remain = world.divisions.values()
-            .any(|od| od.location_province == a.dest && od.owner_tag != a.owner && !od.is_annihilated());
-        if !enemies_remain {
+        // 无敌军 + 进攻到达 → 占领
+        if a.was_attacking {
             if let Some(p) = world.provinces.get_mut(&a.dest) {
                 p.controller = a.owner.clone();
                 p.owner = a.owner;
             }
-        }
-        // 占领尝试损耗 org(无论是否成功占领)
-        if let Some(d) = world.divisions.get_mut(&a.id) {
-            d.org = (d.org - d.max_org * ORG_LOSS_ON_CONQUER).max(0.0);
+            if let Some(d) = world.divisions.get_mut(&a.id) {
+                d.org = (d.org - d.max_org * ORG_LOSS_ON_CONQUER).max(0.0);
+            }
         }
     }
 }
