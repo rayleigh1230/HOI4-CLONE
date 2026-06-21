@@ -24,6 +24,10 @@
   button.secondary:hover { background: #1a4a80; }
   .status-bar { font-size: 12px; color: #7ec8e3; margin: 8px 0; }
   .divisions { display: flex; flex-direction: column; gap: 10px; }
+  .prov-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  .prov-header h3 { color: #e94560; font-size: 14px; }
+  .prov-tag { font-size: 11px; padding: 2px 8px; border-radius: 3px; }
+  .prov-empty { color: #555; font-size: 12px; text-align: center; padding: 20px; }
   #mapCanvas { width: 100%; height: 280px; background: #0a0a1a; border: 1px solid #0f3460; border-radius: 4px; cursor: pointer; margin-bottom: 10px; }
   .map-hint { font-size: 11px; color: #888; margin-bottom: 8px; }
   .combat-window { background: #0a0a1a; border: 1px solid #0f3460; border-radius: 4px; padding: 10px; margin-bottom: 10px; font-size: 12px; }
@@ -112,10 +116,11 @@ create_province = { id = 3 owner = FRA neighbors = { 1 } }</textarea>
   </div>
 
   <div class="panel">
-    <h2>🪖 战场态势</h2>
+    <h2>🗺️ 战场</h2>
     <canvas id="mapCanvas"></canvas>
-    <div class="map-hint">💡 点师卡片选中 → 点目标省移动(红箭头=进攻, 绿=移动) | 直接点省切换控制权(包围)</div>
+    <div class="map-hint">💡 点地块查看部队 | 选师后点目标省移动/进攻 | 双击地块切换控制权</div>
     <div class="battle-info" id="battleInfo"></div>
+    <div class="prov-header" id="provHeader"></div>
     <div class="divisions" id="divisions"></div>
   </div>
 </div>
@@ -272,9 +277,26 @@ function refresh() {
     bi.innerHTML = '<div class="combat-window"><div class="combat-title">和平</div>无活跃战斗</div>';
   }
 
+  // 只显示选中地块的部队(没选则显示提示)
+  const provHeader = document.getElementById('provHeader');
   const container = document.getElementById('divisions');
   container.innerHTML = '';
-  for (const d of state.divisions) {
+  if (selectedProvince === null) {
+    provHeader.innerHTML = '';
+    container.innerHTML = '<div class="prov-empty">👆 点击地块查看驻扎部队</div>';
+    drawMap();
+    return;
+  }
+  const prov = state.provinces.find(p => p.id === selectedProvince);
+  const provDivs = state.divisions.filter(d => d.loc === selectedProvince);
+  const ctrlColor = TAG_COLORS[prov?.controller] || '#666';
+  provHeader.innerHTML = `<h3>📍 省${selectedProvince}</h3><span class="prov-tag" style="background:${ctrlColor}33;border:1px solid ${ctrlColor};color:${ctrlColor}">${prov?.controller || '?'}</span>`;
+  if (provDivs.length === 0) {
+    container.innerHTML = '<div class="prov-empty">该地块无部队</div>';
+    drawMap();
+    return;
+  }
+  for (const d of provDivs) {
     const card = document.createElement('div');
     let status;
     if (d.annihilated) status = '💀 歼灭';
@@ -329,7 +351,8 @@ function refresh() {
 // === 节点图 Canvas ===
 const TAG_COLORS = { GER: '#e94560', FRA: '#16c79a' };
 let canvas, ctx;
-let selectedDivId = null; // 选中师(点师卡片选中, 再点省下移动令)
+let selectedDivId = null; // 选中师(再点目标省移动)
+let selectedProvince = null; // 选中地块(点Canvas地块选中, 显示该地块部队)
 
 function provincePos(id, allIds, w, h) {
   // 省份环形排布; 省1居中(战场)
@@ -373,18 +396,25 @@ function drawMap() {
   });
   ctx.setLineDash([]);
 
-  // 省份圆圈
+  // 省份圆圈(选中加金色高亮)
   state.provinces.forEach(p => {
     const c = pos[p.id];
     const color = TAG_COLORS[p.controller] || '#666';
-    ctx.fillStyle = color + '33';
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 2;
+    const isSel = p.id === selectedProvince;
+    ctx.fillStyle = color + (isSel ? '66' : '33');
+    ctx.strokeStyle = isSel ? '#ffd700' : color;
+    ctx.lineWidth = isSel ? 3 : 2;
     ctx.beginPath(); ctx.arc(c.x, c.y, 26, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    // 部队数量
+    const divCount = state.divisions.filter(d => d.loc === p.id).length;
     ctx.fillStyle = '#fff'; ctx.font = '12px sans-serif'; ctx.textAlign = 'center';
     ctx.fillText('省' + p.id, c.x, c.y + 4);
     ctx.fillStyle = color; ctx.font = '9px sans-serif';
     ctx.fillText(p.controller, c.x, c.y - 18);
+    if (divCount > 0) {
+      ctx.fillStyle = '#ffd700'; ctx.font = 'bold 10px sans-serif';
+      ctx.fillText('×' + divCount, c.x, c.y + 18);
+    }
   });
 
   // 部队图标(按 location 定位; 移动中画箭头到目标)
@@ -417,7 +447,7 @@ function drawMap() {
   });
 }
 
-// 点击省份切换控制权(GER<->FRA, 设定包围)
+// 点击地块: 选中师→移动; 否则→选中地块(显示部队)
 document.addEventListener('click', (e) => {
   if (!canvas || !ctx) return;
   if (e.target.id !== 'mapCanvas') return;
@@ -429,18 +459,37 @@ document.addEventListener('click', (e) => {
   for (const p of state.provinces) {
     const pos = provincePos(p.id, ids, W, H);
     if (Math.hypot(pos.x - x, pos.y - y) < 26) {
-      // 选中了师 → 下移动令; 否则切换控制权
+      // 选中了师 → 下移动令
       if (selectedDivId) {
         try {
           wasm.exports.engine_move_division(selectedDivId, p.id);
           log(`师#${selectedDivId} → 省${p.id}`);
-        } catch (e) {
-          log('⚠️ 移动失败: ' + e.message);
+        } catch (err) {
+          log('⚠️ 移动失败: ' + err.message);
         }
         selectedDivId = null;
         refresh();
         return;
       }
+      // 没选师 → 选中地块(显示该地块部队)
+      selectedProvince = p.id;
+      refresh();
+      return;
+    }
+  }
+});
+
+// 双击地块切换控制权(设包围)
+document.addEventListener('dblclick', (e) => {
+  if (!canvas || e.target.id !== 'mapCanvas') return;
+  const rect = canvas.getBoundingClientRect();
+  const x = e.clientX - rect.left, y = e.clientY - rect.top;
+  const state = getState();
+  const ids = state.provinces.map(p => p.id);
+  const W = canvas.clientWidth, H = canvas.clientHeight;
+  for (const p of state.provinces) {
+    const pos = provincePos(p.id, ids, W, H);
+    if (Math.hypot(pos.x - x, pos.y - y) < 26) {
       const newTag = p.controller === 'GER' ? 'FRA' : 'GER';
       const tagBytes = new TextEncoder().encode(newTag);
       const ptr = wasm.exports.engine_alloc(tagBytes.length);
