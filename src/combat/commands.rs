@@ -217,7 +217,9 @@ pub fn register(reg: &mut Registry) {
             d.destination = Some(target);
             d.move_progress = 0.0;
             d.attacking = is_hostile; // 进军(敌方地块)=红
-            d.retreating = false; // 接到新命令, 立即取消恢复状态
+            if is_hostile {
+                d.retreating = false; // 进军取消恢复; 己方行军保留恢复
+            }
         }
         // 有敌军防守 → 开战: 若目标省已有战斗则加入, 否则新建
         if !enemies.is_empty() {
