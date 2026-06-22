@@ -1,9 +1,10 @@
 //! 行军: 师在省份间移动(陆战循环)
 //!
-//! 三种移动:
-//! - 普通移动(绿): 目标无敌军, 正常推进
-//! - 进攻移动(红, attacking): 战斗+移动并行, 速度×0.33
-//! - 撤退(retreating): 脱离战斗, 速度+25%
+//! 三种移动(由 OrderState 表示):
+//! - 普通移动(绿): Moving{hostile=false}, 目标无敌军, 正常推进
+//! - 进攻移动(红): Moving{hostile=true}, 战斗+移动并行, 速度×0.33
+//! - 撤退: Retreating{..}, 脱离战斗, 速度+25%, 对其他系统不可见
+use crate::runtime::entities::OrderState;
 use crate::runtime::World;
 
 /// 每小时移动进度基准(约20小时到达一个省, 让行军过程可见)
@@ -14,22 +15,23 @@ const COMBAT_MOVEMENT_SPEED: f64 = 0.33;
 /// 占领省份时 org 损失比例(原版 ORG_LOSS_FACTOR_ON_CONQUER)
 const ORG_LOSS_ON_CONQUER: f64 = 0.2;
 
-/// 每小时检查: 移动中 或 pending_arrival 的师, 目标地块有敌军 → 立刻开战
+/// 每小时检查: Moving/Pending 的师, 目标地块有敌军 → 立刻开战
 /// (交战由"地块有无敌军"决定, 非到达决定)
 ///
-/// 重要: 撤退中(retreating)的师被完全忽略 — 不当攻方也不当守方。
-/// 撤退师 location 仍可能在战场省(行军未到达撤退目标), 若不过滤会被每 tick
-/// 重新拉入战斗, 导致 org 归零后 str 持续下降直至歼灭(用户报告的 bug)。
+/// 重要: Retreating 的师被完全忽略 — 不当攻方也不当守方。
+/// 撤退师对其他战斗系统不可见(防止每 tick 被重新拉入战斗, org 归零后 str 持续掉直至歼灭)。
 ///
-/// pending_arrival 的师也参与判定: 它们已到达目标省待命(如撤退师到达敌方省后
-/// 变攻方), 若目标省有敌军 → 开战。
+/// Pending 的师也参与判定: 它们已到达目标省待命(如撤退师到达敌方省后变攻方),
+/// 若目标省有敌军 → 开战。
 pub fn check_engagements(world: &mut World) {
-    // 收集需要检查的师 (id, dest, owner) — 跳过撤退师(撤退 = 强制脱离战斗)
-    // dest 来自 destination(行军中) 或 pending_arrival(已到达待命)
-    let moving: Vec<(u64, u32, String)> = world.divisions.iter()
+    // 收集需要检查的师 (id, dest, owner) — 只看 Moving/Pending, 跳过 Retreating/Idle/Supporting
+    let candidates: Vec<(u64, u32, String)> = world.divisions.iter()
         .filter_map(|(id, d)| {
-            if d.retreating { return None; } // 撤退师不主动开战
-            let dest = d.destination.or(d.pending_arrival)?;
+            let dest = match d.order {
+                OrderState::Moving { dest, .. } => dest,
+                OrderState::Pending { dest } => dest,
+                _ => return None, // Retreating/Idle/Supporting 不主动开战
+            };
             Some((*id, dest, d.owner_tag.clone()))
         })
         .collect();
@@ -39,14 +41,14 @@ pub fn check_engagements(world: &mut World) {
             .chain(b.reserve_attackers.iter()).chain(b.reserve_defenders.iter()).copied())
         .collect();
 
-    for (div_id, dest, owner) in moving {
+    for (div_id, dest, owner) in candidates {
         if in_battle.contains(&div_id) {
             continue; // 已在战斗中
         }
         // 查目标地块有无敌军师 — 排除撤退师(撤退师不当守方被重新拉入)
         let enemies: Vec<u64> = world.divisions.values()
             .filter(|od| od.location_province == dest && od.owner_tag != owner
-                && !od.is_annihilated() && !od.retreating)
+                && !od.is_annihilated() && !od.is_withdrawing())
             .map(|od| od.id)
             .collect();
         if enemies.is_empty() {
@@ -68,17 +70,17 @@ pub fn check_engagements(world: &mut World) {
     }
 }
 
-/// 清理支援攻击: 若支援目标省的战斗已结束(不在 world.battles) → 清 supporting。
+/// 清理支援攻击: 若支援目标省的战斗已结束(不在 world.battles) → 转 Idle。
 /// 对应规则7"如果没战斗支援攻击就自动取消"。
 /// 放在 check_engagements 之后、resolve 之前, 让战斗已结束的支援师在本 tick
-/// resolve 时不再被当攻方(避免它已被移出 battle 但 supporting 还在的瞬态)。
+/// resolve 时不再被当攻方(避免它已被移出 battle 但还在 Supporting 的瞬态)。
 pub fn cancel_finished_supports(world: &mut World) {
     let active_provinces: std::collections::HashSet<u32> = world.battles.iter()
         .map(|b| b.province).collect();
     for d in world.divisions.values_mut() {
-        if let Some(t) = d.supporting {
-            if !active_provinces.contains(&t) {
-                d.supporting = None;
+        if let OrderState::Supporting { target } = d.order {
+            if !active_provinces.contains(&target) {
+                d.order = OrderState::Idle;
             }
         }
     }
@@ -86,66 +88,99 @@ pub fn cancel_finished_supports(world: &mut World) {
 
 /// 推进所有正在移动的师(每小时调用)
 pub fn advance_movement(world: &mut World) {
-    let moving: Vec<u64> = world
+    // 收集所有 Moving/Retreating 的师(需要推进进度)
+    let moving_ids: Vec<u64> = world
         .divisions
         .iter()
-        .filter_map(|(id, d)| d.destination.map(|_| *id))
+        .filter_map(|(id, d)| {
+            matches!(d.order, OrderState::Moving { .. } | OrderState::Retreating { .. }).then_some(*id)
+        })
         .collect();
 
     // 第一阶段: 推进进度; 进度满的师收集"到达候选"(快照模式避免借用冲突)
-    // 到达候选: (id, dest, owner, was_retreating)
     struct Arrival { id: u64, dest: u32, owner: String }
     enum ArrivalDecision {
         // 到达非己方空省 → 直接占领
         Capture(Arrival),
-        // 进入 pending_arrival 等战斗(目标省有正在进行的战斗 或 有敌军)
-        Pending { id: u64, dest: u32, clear_retreat: bool },
+        // Moving 组: 进入 Pending 等战斗(目标省有战斗/敌军), location 不改
+        Pending { id: u64, dest: u32 },
+        // Retreating 组到达敌方有敌军省: 强制归属(location=dest) + 进入战场
+        RetreatIntoEnemy { id: u64, dest: u32 },
     }
     let mut decisions: Vec<ArrivalDecision> = Vec::new();
     {
-        // 第一阶段a: 推进进度 + take destination, 收集到达候选
-        // 到达判定需要查 world.divisions(敌军)和 world.battles, 故只在此块内推进+收集
-        // 决策所需只读信息, 实际写回留到块外
-        let mut arrived: Vec<(u64, u32, String, bool)> = Vec::new(); // (id, dest, owner, was_retreat)
-        for id in moving {
+        // 规则3: "自身未处于任何战场"才能变更归属地。
+        // 收集所有在战场里的师 id(自身作为攻/守/预备参与战斗的师)。
+        let in_battle: std::collections::HashSet<u64> = world.battles.iter()
+            .flat_map(|b| b.attackers.iter().chain(b.defenders.iter())
+                .chain(b.reserve_attackers.iter()).chain(b.reserve_defenders.iter()).copied())
+            .collect();
+
+        // 第一阶段a: 推进进度, 收集到达候选 (id, dest, owner, was_retreat)
+        // 进度条是物理移动, 照常推进(战斗中只是变慢, hostile×0.33)。
+        let mut arrived: Vec<(u64, u32, String, bool)> = Vec::new();
+        for id in moving_ids {
             let Some(d) = world.divisions.get_mut(&id) else { continue };
-            let rate = if d.retreating {
-                MOVE_RATE * (1.0 + RETREAT_SPEED_BONUS)
-            } else if d.attacking {
-                MOVE_RATE * COMBAT_MOVEMENT_SPEED
-            } else {
-                MOVE_RATE
+            // 按状态决定速度系数
+            let rate = match d.order {
+                OrderState::Retreating { .. } => MOVE_RATE * (1.0 + RETREAT_SPEED_BONUS),
+                OrderState::Moving { hostile: true, .. } => MOVE_RATE * COMBAT_MOVEMENT_SPEED,
+                OrderState::Moving { hostile: false, .. } => MOVE_RATE,
+                _ => continue,
             };
-            d.move_progress += rate;
-            if d.move_progress >= 1.0 {
-                if let Some(dest) = d.destination.take() {
-                    d.move_progress = 0.0;
-                    d.attacking = false;
-                    let owner = d.owner_tag.clone();
-                    let was_retreat = d.retreating;
-                    arrived.push((id, dest, owner, was_retreat));
+            let reached = match d.order {
+                OrderState::Moving { ref mut progress, .. } => {
+                    *progress += rate;
+                    *progress >= 1.0
                 }
+                OrderState::Retreating { ref mut progress, .. } => {
+                    *progress += rate;
+                    *progress >= 1.0
+                }
+                _ => false,
+            };
+            if reached {
+                // 规则3: Moving 师自身在战场里 → 进度满也不变更归属地。
+                // 保持 Moving 状态(进度满), 等战斗结束(师离开 battle 列表)后下 tick 再结算。
+                // Retreating 师对战场不可见(不在 battle 列表), 不受此限制。
+                if in_battle.contains(&id) && d.is_moving() {
+                    continue; // 不收集为到达候选, 进度保持满值
+                }
+                // 取出 dest + owner + 是否撤退, 把状态置为 Idle(后续第二阶段根据判定改写)
+                let (dest, owner, was_retreat) = match d.order {
+                    OrderState::Moving { dest, .. } => (dest, d.owner_tag.clone(), false),
+                    OrderState::Retreating { dest, .. } => (dest, d.owner_tag.clone(), true),
+                    _ => continue,
+                };
+                d.order = OrderState::Idle; // 临时置 Idle, 第二阶段再决定
+                arrived.push((id, dest, owner, was_retreat));
             }
         }
         // 第一阶段b: 对每个到达候选判定(此时 d 借用已释放, 可查 world)
         for (id, dest, owner, was_retreat) in arrived {
             let dest_has_battle = world.battles.iter().any(|b| b.province == dest);
-            if dest_has_battle {
-                decisions.push(ArrivalDecision::Pending { id, dest, clear_retreat: false });
-                continue;
-            }
             // 无正在进行的战斗 → 查目标省有无敌军部队(规则1: 同省异国师立刻开战)
             let has_enemies = world.divisions.values()
                 .any(|od| od.location_province == dest && od.owner_tag != owner
                     && !od.is_annihilated());
-            if has_enemies {
-                // 目标省有敌军 → 不能直接占领。
-                // 撤退师到达敌方省: 即将变攻方, 清撤退状态让 check_engagements 开战。
-                // 普通师: 同样进 pending 等战斗。
-                decisions.push(ArrivalDecision::Pending { id, dest, clear_retreat: was_retreat });
+            if was_retreat {
+                // Retreating 组到达(独立判定, 规则见 order-state-semantics.md):
+                //   - 己方/敌方无敌军 → Capture(归属 + Idle; 敌方空省占领)
+                //   - 敌方有敌军(或有战斗) → RetreatIntoEnemy(强制归属 + 进入战场)
+                if has_enemies || dest_has_battle {
+                    decisions.push(ArrivalDecision::RetreatIntoEnemy { id, dest });
+                } else {
+                    decisions.push(ArrivalDecision::Capture(Arrival { id, dest, owner }));
+                }
             } else {
-                // 无战斗 + 无敌军 → 到达(结算归属)
-                decisions.push(ArrivalDecision::Capture(Arrival { id, dest, owner }));
+                // Moving 组到达:
+                //   - 有战斗/敌军 → Pending(location 不改, 规则3)
+                //   - 无战斗 + 无敌军 → Capture(占领)
+                if dest_has_battle || has_enemies {
+                    decisions.push(ArrivalDecision::Pending { id, dest });
+                } else {
+                    decisions.push(ArrivalDecision::Capture(Arrival { id, dest, owner }));
+                }
             }
         }
     }
@@ -156,16 +191,26 @@ pub fn advance_movement(world: &mut World) {
             ArrivalDecision::Capture(a) => {
                 if let Some(d) = world.divisions.get_mut(&a.id) {
                     d.location_province = a.dest;
+                    d.order = OrderState::Idle;
                 }
                 arrivals.push(a);
             }
-            ArrivalDecision::Pending { id, dest, clear_retreat } => {
+            ArrivalDecision::Pending { id, dest } => {
                 if let Some(d) = world.divisions.get_mut(&id) {
-                    d.pending_arrival = Some(dest);
-                    if clear_retreat {
-                        d.retreating = false; // 不再撤退, 即将变攻方
-                    }
+                    // 规则3: Pending 时 location 不变(师在战场, 归属地保持上一个占领省)。
+                    // 师向 dest 有进度箭头(UI), 但归属地仍是出发地。
+                    // 战斗胜后由第四阶段改 location; 战败则从当前归属地撤退。
+                    d.order = OrderState::Pending { dest };
                 }
+            }
+            ArrivalDecision::RetreatIntoEnemy { id, dest } => {
+                // Retreating 组到达敌方有敌军省: 强制归属(location=dest) + 进入战场
+                // (撤退组的独立规则: 即便没占领, 归属地也带过来, 当攻方开战)
+                if let Some(d) = world.divisions.get_mut(&id) {
+                    d.location_province = dest;
+                    d.order = OrderState::Pending { dest };
+                }
+                // 开战由下一 tick 的 check_engagements 处理(师已是 Pending, location=dest)
             }
         }
     }
@@ -184,17 +229,17 @@ pub fn advance_movement(world: &mut World) {
             }
         }
     }
-    // 第四阶段: 检查 pending_arrival 的师(进度满+等战斗胜)
+    // 第四阶段: 检查 Pending 的师(进度满+等战斗胜)
     // 如果目标省已无战斗 且 无敌军(敌人全撤/歼灭) → 真正到达(改location+占领)
-    // 注意: 必须同时检查"无敌军", 否则刚进 pending 的师(战斗还没被
+    // 注意: 必须同时检查"无敌军", 否则刚进 Pending 的师(战斗还没被
     //       check_engagements 创建)会被误判为"战斗已结束"而错误占领。
     let pending: Vec<u64> = world.divisions.iter()
-        .filter_map(|(id, d)| d.pending_arrival.map(|_| *id))
+        .filter_map(|(id, d)| d.is_pending().then_some(*id))
         .collect();
     for id in pending {
         // 快照决策所需只读信息(dest, owner), 避免与后续 get_mut 借用冲突
         let (dest, owner) = match world.divisions.get(&id) {
-            Some(d) => match d.pending_arrival {
+            Some(d) => match d.pending_dest() {
                 Some(p) => (p, d.owner_tag.clone()),
                 None => continue,
             },
@@ -216,7 +261,7 @@ pub fn advance_movement(world: &mut World) {
             .map(|p| p.controller == owner)
             .unwrap_or(false);
         if let Some(d) = world.divisions.get_mut(&id) {
-            d.pending_arrival = None;
+            d.order = OrderState::Idle;
             d.location_province = dest;
         }
         if !is_own {
@@ -234,14 +279,14 @@ pub fn advance_movement(world: &mut World) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::entities::Division;
+    use crate::runtime::entities::{Division, OrderState};
 
     #[test]
     fn t_division_moves_to_destination() {
         let mut w = World::new();
         let d = Division {
             id: 0, owner_tag: "GER".into(), location_province: 1,
-            destination: Some(2), move_progress: 0.0,
+            order: OrderState::Moving { dest: 2, progress: 0.0, hostile: false, origin: 1 },
             ..Default::default()
         };
         let did = w.add_division(d);
@@ -249,11 +294,11 @@ mod tests {
         for _ in 0..19 {
             advance_movement(&mut w);
         }
-        assert!((w.divisions.get(&did).unwrap().move_progress - 0.95).abs() < 1e-9);
+        assert!((w.divisions.get(&did).unwrap().move_progress() - 0.95).abs() < 1e-9);
         assert_eq!(w.divisions.get(&did).unwrap().location_province, 1, "未到不应换省");
         advance_movement(&mut w);
         assert_eq!(w.divisions.get(&did).unwrap().location_province, 2);
-        assert!(w.divisions.get(&did).unwrap().destination.is_none());
+        assert!(w.divisions.get(&did).unwrap().is_idle(), "到达后应转 Idle");
     }
 
     #[test]
@@ -261,19 +306,19 @@ mod tests {
         let mut w = World::new();
         let d1 = Division {
             id: 0, owner_tag: "X".into(), location_province: 1,
-            destination: Some(2), move_progress: 0.0, retreating: false,
+            order: OrderState::Moving { dest: 2, progress: 0.0, hostile: false, origin: 1 },
             ..Default::default()
         };
         let d2 = Division {
             id: 0, owner_tag: "X".into(), location_province: 1,
-            destination: Some(2), move_progress: 0.0, retreating: true,
+            order: OrderState::Retreating { dest: 2, progress: 0.0 },
             ..Default::default()
         };
         let id1 = w.add_division(d1);
         let id2 = w.add_division(d2);
         advance_movement(&mut w);
-        let p1 = w.divisions.get(&id1).unwrap().move_progress;
-        let p2 = w.divisions.get(&id2).unwrap().move_progress;
+        let p1 = w.divisions.get(&id1).unwrap().move_progress();
+        let p2 = w.divisions.get(&id2).unwrap().move_progress();
         assert!(p2 > p1, "撤退应更快: normal={p1} retreat={p2}");
     }
 
@@ -282,19 +327,19 @@ mod tests {
         let mut w = World::new();
         let d1 = Division {
             id: 0, owner_tag: "X".into(), location_province: 1,
-            destination: Some(2), move_progress: 0.0, attacking: false,
+            order: OrderState::Moving { dest: 2, progress: 0.0, hostile: false, origin: 1 },
             ..Default::default()
         };
         let d2 = Division {
             id: 0, owner_tag: "X".into(), location_province: 1,
-            destination: Some(2), move_progress: 0.0, attacking: true,
+            order: OrderState::Moving { dest: 2, progress: 0.0, hostile: true, origin: 1 },
             ..Default::default()
         };
         let id1 = w.add_division(d1);
         let id2 = w.add_division(d2);
         advance_movement(&mut w);
-        let p1 = w.divisions.get(&id1).unwrap().move_progress;
-        let p2 = w.divisions.get(&id2).unwrap().move_progress;
+        let p1 = w.divisions.get(&id1).unwrap().move_progress();
+        let p2 = w.divisions.get(&id2).unwrap().move_progress();
         assert!(p2 < p1, "进攻移动应更慢: normal={p1} attack={p2}");
     }
 
@@ -307,7 +352,7 @@ mod tests {
         });
         let d = Division {
             id: 0, owner_tag: "GER".into(), location_province: 1,
-            destination: Some(2), move_progress: 0.99, attacking: true,
+            order: OrderState::Moving { dest: 2, progress: 0.99, hostile: true, origin: 1 },
             max_org: 60.0, org: 60.0,
             ..Default::default()
         };
@@ -331,7 +376,7 @@ mod tests {
         }
     }
 
-    /// 师A(GER)归属省1, 正在进攻省2(destination=2, location仍=1);
+    /// 师A(GER)归属省1, 正在进攻省2(Moving dest=2, location仍=1);
     /// 师B(FRA)从省3向省1进军 → 省1应爆发战斗, A 应自动成为省1的**防守方**。
     #[test]
     fn t_p2_division_defends_own_province_while_attacking_elsewhere() {
@@ -340,17 +385,13 @@ mod tests {
         let mut a = live_div();
         a.owner_tag = "GER".into();
         a.location_province = 1;
-        a.destination = Some(2);
-        a.origin_province = 1;
-        a.attacking = true;
+        a.order = OrderState::Moving { dest: 2, progress: 0.0, hostile: true, origin: 1 };
         let a = w.add_division(a);
         // 师B: FRA, 在省3, 向省1进军
         let mut b = live_div();
         b.owner_tag = "FRA".into();
         b.location_province = 3;
-        b.destination = Some(1);
-        b.origin_province = 3;
-        b.attacking = true;
+        b.order = OrderState::Moving { dest: 1, progress: 0.0, hostile: true, origin: 3 };
         let b = w.add_division(b);
 
         check_engagements(&mut w);
@@ -375,9 +416,7 @@ mod tests {
         let mut a = live_div();
         a.owner_tag = "GER".into();
         a.location_province = 1;
-        a.destination = Some(2);
-        a.origin_province = 1;
-        a.attacking = true;
+        a.order = OrderState::Moving { dest: 2, progress: 0.0, hostile: true, origin: 1 };
         let a = w.add_division(a);
         // C(FRA) 在省2防守 → A vs C 战斗(省2)
         let mut c = live_div();
@@ -388,9 +427,7 @@ mod tests {
         let mut b = live_div();
         b.owner_tag = "FRA".into();
         b.location_province = 3;
-        b.destination = Some(1);
-        b.origin_province = 3;
-        b.attacking = true;
+        b.order = OrderState::Moving { dest: 1, progress: 0.0, hostile: true, origin: 3 };
         let b = w.add_division(b);
 
         check_engagements(&mut w);

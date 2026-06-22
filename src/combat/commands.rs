@@ -1,6 +1,6 @@
 //! 战斗相关命令注册(M3-4)
 use crate::ast::Arg;
-use crate::runtime::entities::{Battle, Division};
+use crate::runtime::entities::{Battle, Division, OrderState};
 use crate::runtime::error::CmdError;
 use crate::runtime::registry::ParamGet;
 use crate::runtime::Registry;
@@ -27,10 +27,14 @@ fn join_as_attacker(world: &mut crate::runtime::World, div_id: u64, target: u32,
         // 加入已有战斗: 判定进前线还是预备队
         // 规则: 同出发地(from_prov)已有师在攻该目标 → 后到的进预备队(时间线落后)
         //       不同出发地 → 直接前线(新方向); 再检查宽度: 超宽也进预备队
+        // origin 取值: Moving 用其 origin 字段; 其它(支援/守方转攻)用 location_province
+        let origin_of = |d: &Division| -> u32 {
+            d.move_origin().unwrap_or(d.location_province)
+        };
         let same_origin_exists = world.started && world.battles[bidx].attackers.iter()
             .chain(world.battles[bidx].reserve_attackers.iter())
             .any(|aid| world.divisions.get(aid)
-                .map(|d| d.origin_province == from_prov)
+                .map(|d| origin_of(d) == from_prov)
                 .unwrap_or(false));
         let over_width = !crate::combat::width::can_join_frontline(world, &world.battles[bidx].attackers, div_width);
         if same_origin_exists || over_width {
@@ -163,13 +167,7 @@ pub fn register(reg: &mut Registry) {
             equipment_held: eq_held,
             manpower_need: mp_total,
             manpower_held: mp_total,
-            retreating: false,
-            destination: None,
-            move_progress: 0.0,
-            attacking: false,
-            origin_province: loc,
-            pending_arrival: None,
-            supporting: None,
+            order: OrderState::Idle,
         };
         w.add_division(d);
         Ok(())
@@ -254,21 +252,19 @@ pub fn register(reg: &mut Registry) {
             Some(d) => (d.owner_tag.clone(), d.location_province),
             None => return Err(CmdError::RuntimeError(format!("move_division: 师 {div_id} 不存在"))),
         };
-        // 防守主动撤退判定: 师当前在一场进行中的战斗地块 + 目标是己方控制省
-        // (不分攻守 — 空降/撤退到敌方的攻方师在战斗地块, 下移动到己方省也撤)
+        // 防守主动撤退判定(规则4: 撤退只去邻近省份):
+        // 师当前在战斗地块 + 目标是相邻的己方控制省 → 撤退
         let on_battle_province = w.battles.iter().any(|b| b.province == cur_loc);
         let target_is_friendly = w.provinces.get(&target)
             .map(|p| p.controller == owner).unwrap_or(false);
-        if on_battle_province && target_is_friendly {
-            // 进入撤退状态: retreating=true, destination=目标, 从所有战斗角色移除
+        let target_is_adjacent = w.provinces.get(&cur_loc)
+            .map(|p| p.neighbors.contains(&target))
+            .unwrap_or(false);
+        if on_battle_province && target_is_friendly && target_is_adjacent {
+            // 进入撤退状态: 从所有战斗角色移除, 转入 Retreating 行军
+            // location 保持当前省(撤退路上不可见, 到达才改)
             if let Some(d) = w.divisions.get_mut(&div_id) {
-                d.retreating = true;
-                d.destination = Some(target);
-                d.move_progress = 0.0;
-                d.attacking = false;
-                d.pending_arrival = None;
-                d.supporting = None;
-                // 注: location 不改(行军中, 到达才改), origin 不改(已是当前省)
+                d.order = OrderState::Retreating { dest: target, progress: 0.0 };
             }
             for b in w.battles.iter_mut() {
                 b.attackers.retain(|&id| id != div_id);
@@ -280,21 +276,18 @@ pub fn register(reg: &mut Registry) {
         }
         // 查目标省有无敌军(非己方的师; 排除撤退师 — 撤退师不当守方被重新拉入)
         let enemies: Vec<u64> = w.divisions.values()
-            .filter(|d| d.location_province == target && d.owner_tag != owner && !d.retreating)
+            .filter(|d| d.location_province == target && d.owner_tag != owner && !d.is_withdrawing())
             .map(|d| d.id)
             .collect();
         // 进军判定: 目标省非己方控制 → 进军红箭头(无论有无敌军)
         let target_controller = w.provinces.get(&target).map(|p| p.controller.as_str()).unwrap_or("");
         let is_hostile = target_controller != owner;
-        // 设移动状态
+        // 设移动状态: 进入 Moving, 记录 origin=当前省
         if let Some(d) = w.divisions.get_mut(&div_id) {
-            d.origin_province = d.location_province; // 记录出发地
-            d.destination = Some(target);
-            d.move_progress = 0.0;
-            d.attacking = is_hostile; // 进军(敌方地块)=红
-            if is_hostile {
-                d.retreating = false; // 进军取消恢复; 己方行军保留恢复
-            }
+            d.order = OrderState::Moving {
+                dest: target, progress: 0.0,
+                hostile: is_hostile, origin: cur_loc,
+            };
         }
         // 有敌军防守 → 开战: 加入或新建战斗(复用 join_as_attacker)
         if !enemies.is_empty() {
@@ -318,9 +311,9 @@ pub fn register(reg: &mut Registry) {
         // 取该战斗的守方(已在前线的敌军), 用于 join_as_attacker 的 enemies 参数
         // (join_as_attacker 在已有战斗时只走"加入"分支, enemies 仅用于新建分支, 传空即可)
         let enemies: Vec<u64> = Vec::new();
-        // 设支援状态(师不移动: 不改 location/destination/move_progress/attacking)
+        // 设支援状态(师不移动: 不改 location/order 内的移动字段)
         if let Some(d) = w.divisions.get_mut(&div_id) {
-            d.supporting = Some(target);
+            d.order = OrderState::Supporting { target };
         }
         // 加入已有战斗(同 origin / 宽度判定, 复用 move_division 逻辑)
         join_as_attacker(w, div_id, target, &enemies);
@@ -329,30 +322,21 @@ pub fn register(reg: &mut Registry) {
 
     // 停止命令: 取消师当前主动发起的行动(进军/移动/支援), 保留被动防守和撤退。
     // 规则:
-    // - retreating=true → 完全忽略(撤退不能停, 哪怕有 destination)
-    // - 有 destination 或 supporting → 可停止:
-    //   清 destination/attacking/move_progress/pending_arrival/supporting
-    //   从主动参与的战斗 attackers/reserve_attackers 移除
+    // - Retreating → 完全忽略(撤退不能停, 哪怕有 destination)
+    // - Moving/Supporting → 可停止: 转回 Idle, 从主动参与的战斗 attackers/reserve_attackers 移除
     // - 不动 defenders/reserve_defenders(被动防守继续)
-    // - 无 destination/supporting(纯防守/撤退变攻方)→ 忽略(无主动指令可停)
+    // - Idle/Pending(纯防守/撤退变攻方)→ 忽略(无主动指令可停)
     reg.register("stop_order", |w, p| {
         let div_id = num_of(np(p, "stop_order", "division")?)? as u64;
         // 读取判断(单独作用域, 释放借用后再 get_mut)
         let should_stop = {
             let Some(d) = w.divisions.get(&div_id) else { return Ok(()); };
-            // 撤退中 → 忽略(撤退是战败的被动结果, 不能停)
-            if d.retreating { return Ok(()); }
-            // 无主动指令(destination/supporting 都没)→ 忽略
-            d.destination.is_some() || d.supporting.is_some()
+            matches!(d.order, OrderState::Moving { .. } | OrderState::Supporting { .. })
         };
         if !should_stop { return Ok(()); }
-        // 清主动行动状态
+        // 清主动行动状态 → Idle
         if let Some(d) = w.divisions.get_mut(&div_id) {
-            d.destination = None;
-            d.attacking = false;
-            d.move_progress = 0.0;
-            d.pending_arrival = None;
-            d.supporting = None;
+            d.order = OrderState::Idle;
         }
         // 从所有战斗的"攻方"角色移除(保留守方角色 = 被动防守)
         for b in w.battles.iter_mut() {

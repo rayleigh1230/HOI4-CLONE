@@ -50,9 +50,9 @@ fn print(world: &World, fra_id: u64) {
         let eq = d.equipment_ratio_only();
         let mp = d.manpower_ratio();
         println!(
-            "{}#{}: HP={:.0}/{:.0} org={:.1}/{:.0} 装备={:.0}% 人力={:.0}% loc={} dest={:?} prog={:.2} retreat={}",
+            "{}#{}: HP={:.0}/{:.0} org={:.1}/{:.0} 装备={:.0}% 人力={:.0}% loc={} order={:?}",
             d.owner_tag, d.id, d.strength, d.max_strength, d.org, d.max_org,
-            eq * 100.0, mp * 100.0, d.location_province, d.destination, d.move_progress, d.retreating
+            eq * 100.0, mp * 100.0, d.location_province, d.order
         );
     }
     let _ = fra_id;

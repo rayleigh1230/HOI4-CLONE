@@ -1,7 +1,7 @@
 //! 陆战结算(公式见 docs/formulas/land-combat.md)
 //!
 //! 安全借用策略: 攻方属性拷贝成只读 AtkStats, 守方可变借用写伤害。避免 unsafe。
-use crate::runtime::entities::Division;
+use crate::runtime::entities::{Division, OrderState};
 use crate::runtime::World;
 
 /// 全局系数(对应 NMilitary defines, 见 docs/formulas/land-combat.md)
@@ -270,7 +270,7 @@ fn accumulate_eq_loss(
 
 /// 战斗生命周期: 区分撤退(org0+HP有)和歼灭(HP0)
 /// - 歼灭: 从 world.divisions 删除师(番号撤销)
-/// - 撤退: 标 retreating, 移出当前战斗(师保留, 待撤邻省)
+/// - 撤退: 转 Retreating 状态, 移出当前战斗(师保留, 待撤邻省)
 ///
 /// 一方全退(歼灭或撤退) → 战斗结束
 fn cleanup_battles(world: &mut World) {
@@ -302,7 +302,7 @@ fn cleanup_battles(world: &mut World) {
             for id in ids {
                 match world.divisions.get(id) {
                     Some(d) if d.is_annihilated() => annihilated.push(*id),
-                    Some(d) if d.is_retreating() => retreating.push(*id),
+                    Some(d) if d.should_withdraw() => retreating.push(*id),
                     Some(_) => alive.push(*id),
                     None => annihilated.push(*id), // 已不存在的当歼灭
                 }
@@ -324,16 +324,16 @@ fn cleanup_battles(world: &mut World) {
         if def_frontline_routed || atk_frontline_routed {
             battles_to_remove.push(*idx);
             // 守方前线崩 → 守方预备队带溃撤退
-            // 占地条件: 有攻方师已在该省(location==province, 非移动中) → 立即占地;
+            // 占地条件: 有攻方师已在该省(location==province, Idle) → 立即占地;
             //           否则等攻方行军到达(由 advance_movement 处理)
             if def_frontline_routed {
                 for rid in res_def {
                     routing_reserves.push((*rid, false)); // 守方预备队
                 }
-                // 检查是否有攻方师已在该省(已到达)
+                // 检查是否有攻方师已在该省(已到达, Idle)
                 let attacker_present = (atk_alive.iter().chain(res_atk.iter()))
                     .any(|aid| world.divisions.get(aid)
-                        .map(|d| d.location_province == *province && d.destination.is_none())
+                        .map(|d| d.location_province == *province && d.is_idle())
                         .unwrap_or(false));
                 if attacker_present {
                     let winner_src = atk_alive.first().or(res_atk.first());
@@ -357,28 +357,45 @@ fn cleanup_battles(world: &mut World) {
 
     // 带溃预备队加入撤退处理(带角色)
     to_mark_retreat.extend(routing_reserves);
-    // 撤退处理(P3):
-    // - 攻方(is_attacker=true)→ 瞬间回 origin_province(无需行军, 取消进攻动作)
-    // - 守方(is_attacker=false)→ 撤到邻接己方省(行军, retreating=true); 无邻省→包围→歼灭
+    // 战败处理(区分攻方/守方):
+    // - 攻方战败(进攻打崩): 归属地己方→瞬间回归属地(Idle); 归属地丢→进 Retreating 撤邻省
+    // - 守方战败(防守打崩): 进 Retreating 撤向邻接己方省(行军); 无邻省→包围→歼灭
+    //   location 保持原值(Retreating 期间不可见, 到达才改)。
     let mut surrounded: Vec<u64> = Vec::new();
     for (id, is_attacker) in to_mark_retreat {
         if is_attacker {
-            // 进攻方撤退: 瞬间回出发地(取消进攻动作, 不行军)
-            if let Some(d) = world.divisions.get_mut(&id) {
-                d.location_province = d.origin_province;
-                d.destination = None;
-                d.move_progress = 0.0;
-                d.attacking = false;
-                d.retreating = false; // 已回到 origin, 不需行军撤退
-                d.pending_arrival = None;
-                d.supporting = None; // 支援攻方撤退 → 清支援标记
+            // 攻方战败(进攻打崩): 区分两种情况
+            //   - 归属地(location)仍己方 → 瞬间回归属地(转 Idle, "进攻失败回家")
+            //   - 归属地已非己方(老家被端) → 进 Retreating 撤向邻省("被迫撤退")
+            //     无邻省 → 歼灭(包围)
+            let (loc, owner) = match world.divisions.get(&id) {
+                Some(d) => (d.location_province, d.owner_tag.clone()),
+                None => continue,
+            };
+            let loc_friendly = world.provinces.get(&loc)
+                .map(|p| p.controller == owner).unwrap_or(false);
+            if loc_friendly {
+                // 归属地仍己方 → 原地转 Idle(进攻失败, 回归属地)
+                if let Some(d) = world.divisions.get_mut(&id) {
+                    d.order = OrderState::Idle;
+                }
+            } else {
+                // 归属地丢了 → 进 Retreating 撤向邻省(行军, 非瞬间)
+                match world.friendly_neighbor(loc, &owner) {
+                    Some(dest) => {
+                        if let Some(d) = world.divisions.get_mut(&id) {
+                            d.order = OrderState::Retreating { dest, progress: 0.0 };
+                        }
+                    }
+                    None => {
+                        surrounded.push(id);
+                    }
+                }
             }
             continue;
         }
-        // 守方撤退: 撤向邻接己方省(原逻辑)
-        // 关键改动: 撤退瞬间把 location 改成撤退目的地(而非保持原省)。
-        // 目的: 防止"撤退途中原省被友军夺回 → 到达敌方省变攻方 → 战败回 origin 瞬移"的 BUG。
-        // 撤退师自始至终 location 都是目的地, 后续判定都基于该地(空降语义)。
+        // 守方撤退: 转 Retreating 撤向邻接己方省(行军)
+        // location 保持原值(Retreating 期间不可见, 到达才改)
         let (loc, owner) = match world.divisions.get(&id) {
             Some(d) => (d.location_province, d.owner_tag.clone()),
             None => continue,
@@ -386,10 +403,7 @@ fn cleanup_battles(world: &mut World) {
         match world.friendly_neighbor(loc, &owner) {
             Some(dest) => {
                 if let Some(d) = world.divisions.get_mut(&id) {
-                    d.retreating = true;
-                    d.location_province = dest; // 撤退瞬间归属地变目的地
-                    d.destination = Some(dest);
-                    d.move_progress = 0.0;
+                    d.order = OrderState::Retreating { dest, progress: 0.0 };
                 }
             }
             None => {
@@ -420,6 +434,8 @@ fn cleanup_battles(world: &mut World) {
     }
 }
 
+/// 攻方失败后查找安全撤退目的地(根治瞬移 bug)。
+/// 规则:
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -616,31 +632,29 @@ mod tests {
         );
     }
 
-    // ===== P3: 进攻失败瞬间回 origin_province(不行军) =====
+    // ===== P3: 进攻失败后的撤退(基于归属地语义, Retreating 行军, 无瞬移) =====
 
-    /// 进攻方 A(origin=1, location=1, 进攻省2)被打退(org=0, HP有余)
-    /// → 应瞬间回 origin_province(1), destination 清空, 无需行军。
+    /// 进攻方 A(location=省1 己方, 进攻省2)被打退(org=0, HP 有余)
+    /// → location=省1 仍 GER 己方 → 留在原地(转 Idle), 无需撤退。
     #[test]
     fn t_p3_attacker_retreats_to_origin_instantly() {
         let mut w = World::new();
-        // A: GER, 归属省1, 正进攻省2(location 仍是1, origin=1)
+        // A: GER, 归属省1, 正进攻省2(location 仍是1, Moving origin=1)
         let mut a = inf("ATK");
         a.owner_tag = "GER".into();
         a.location_province = 1;
-        a.origin_province = 1;
-        a.destination = Some(2);
-        a.attacking = true;
+        a.order = OrderState::Moving { dest: 2, progress: 0.0, hostile: true, origin: 1 };
         // 模拟被打退: org=0, strength>0
         a.org = 0.0;
         a.strength = 10.0;
         let a_id = w.add_division(a);
-        // 战斗: 省2, A 攻 B 守
+        // 战斗: 省2, A 攻 (守方占位)
         w.battles.push(Battle {
             id: 0, province: 2,
-            attackers: vec![a_id], defenders: vec![999], // 守方占位(实际不会分类影响)
+            attackers: vec![a_id], defenders: vec![999],
             ..Default::default()
         });
-        // 省份地图: 省1=GER(出发地), 省2=FRA
+        // 省份地图: 省1=GER(出发地, 仍己方), 省2=FRA
         w.provinces.insert(1, crate::runtime::Province {
             id: 1, owner: "GER".into(), controller: "GER".into(),
             terrain: "plains".into(), neighbors: vec![2],
@@ -653,74 +667,58 @@ mod tests {
         resolve_all_battles(&mut w);
 
         let d = w.divisions.get(&a_id).expect("A 应存活(撤退非歼灭)");
-        // 核心: A 瞬间回 origin_province(1), 不再行军
-        assert_eq!(d.location_province, 1, "A 应回到 origin_province(1)");
-        assert!(d.destination.is_none(), "进攻失败回origin后destination应清空");
-        assert!(!d.attacking, "attacking 应清除");
-        assert!(!d.retreating, "瞬间回origin不应再标 retreating(无需行军撤退)");
-        assert!(d.pending_arrival.is_none(), "pending_arrival 应清空");
+        // 核心: origin 仍己方 → 回 origin(省1), 转 Idle
+        assert_eq!(d.location_province, 1, "A 应回到 origin(省1, 仍己方)");
+        assert!(d.is_idle(), "攻方失败回 origin 后应转 Idle, 实际 order={:?}", d.order);
     }
 
-    /// 守方在自己省被打退 → 仍按原逻辑撤到邻接己方省(需行军, retreating=true)。
-    /// (守方 location==origin, 不触发"回出发地"分支)
+    /// 攻方在敌方省战败 → location 非己方 → 转 Retreating 撤向邻省(行军, 非瞬间)。
+    /// 新语义: 战败判定基于 location(归属地), 不再读 origin。
     #[test]
-    fn t_p3_defender_retreats_to_neighbor_keeps_marching() {
+    fn t_p3_attacker_in_enemy_province_retreats_to_neighbor() {
         let mut w = World::new();
-        // D: FRA 守省2, origin=2(没移动过), 被打退
-        let mut d = inf("DEF");
-        d.owner_tag = "FRA".into();
-        d.location_province = 2;
-        d.origin_province = 2; // 守方: origin==location
-        d.org = 0.0;
-        d.strength = 10.0;
-        let d_id = w.add_division(d);
-        // 攻方 A: GER, soft_attack=0(不打D, 让 D 保持 org=0 触发撤退分类)
+        // A: GER, 已在省2(FRA 敌方省)作战, 战败
         let mut a = inf("ATK");
         a.owner_tag = "GER".into();
-        a.location_province = 1;
-        a.origin_province = 1;
-        a.soft_attack = 0.0;
-        a.hard_attack = 0.0;
-        let _a_id = w.add_division(a);
-        // 战斗: 省2, A 攻 D 守
+        a.location_province = 2; // 在敌方省2
+        a.order = OrderState::Idle;
+        a.org = 0.0;
+        a.strength = 10.0;
+        let a_id = w.add_division(a);
         w.battles.push(Battle {
             id: 0, province: 2,
-            attackers: vec![_a_id], defenders: vec![d_id],
+            attackers: vec![a_id], defenders: vec![999],
             ..Default::default()
         });
-        // 省份: 省2=FRA, 省3=FRA(邻接, 撤退目标)
+        // 省份: 省2=FRA(敌方, A 战败处), 省3=GER(省2 的邻省, 撤退目标)
         w.provinces.insert(2, crate::runtime::Province {
             id: 2, owner: "FRA".into(), controller: "FRA".into(),
             terrain: "plains".into(), neighbors: vec![3],
         });
         w.provinces.insert(3, crate::runtime::Province {
-            id: 3, owner: "FRA".into(), controller: "FRA".into(),
+            id: 3, owner: "GER".into(), controller: "GER".into(),
             terrain: "plains".into(), neighbors: vec![2],
         });
 
         resolve_all_battles(&mut w);
 
-        let div = w.divisions.get(&d_id).expect("D 应存活");
-        // 守方撤退: location 变撤退目的地省3(撤退瞬间归属地变更), destination=省3, retreating=true
-        assert_eq!(div.location_province, 3, "守方撤退 location 变目的地省3");
-        assert_eq!(div.destination, Some(3), "守方撤向邻省3");
-        assert!(div.retreating, "守方撤退标 retreating");
+        let d = w.divisions.get(&a_id).expect("A 应存活(转 Retreating 撤向省3)");
+        // location=省2 非己方(GER) → 转 Retreating 撤向邻省省3(GER)
+        assert!(d.is_withdrawing(), "应转 Retreating, 实际 order={:?}", d.order);
+        assert_eq!(d.retreat_dest(), Some(3), "撤退目标应为邻省省3");
+        assert_eq!(d.location_province, 2, "Retreating 期间 location 保持省2(未到达)");
     }
 
-    // ===== 撤退瞬间归属地变更(防瞬移 BUG) =====
-    // 战败撤退时, 守方 location 立刻改成撤退目的地(而非保持原省)。
-    // 目的: 防止"撤退途中原省被友军夺回 → 到达敌方省变攻方 → 战败回 origin 瞬移"的 BUG。
-    // 撤退师自始至终的 location 都是撤退目的地, 后续判定都基于该地。
-
-    /// 守方 D(origin=location=2)战败撤退到省3 → location 应立刻变 3(非保持2)。
+    /// 守方在自己省被打退 → 转 Retreating 撤向邻接己方省(行军); location 保持原省。
+    /// (新语义: Retreating 期间 location 不改, 对其他系统不可见, 到达才改)
     #[test]
-    fn t_retreat_changes_location_to_destination() {
+    fn t_p3_defender_retreats_to_neighbor_keeps_marching() {
         let mut w = World::new();
-        // D: FRA 守省2, origin=2(没移动过), 被打退
+        // D: FRA 守省2, Idle(没移动过), 被打退
         let mut d = inf("DEF");
         d.owner_tag = "FRA".into();
         d.location_province = 2;
-        d.origin_province = 2;
+        d.order = OrderState::Idle;
         d.org = 0.0;
         d.strength = 10.0;
         let d_id = w.add_division(d);
@@ -728,11 +726,10 @@ mod tests {
         let mut a = inf("ATK");
         a.owner_tag = "GER".into();
         a.location_province = 1;
-        a.origin_province = 1;
+        a.order = OrderState::Idle;
         a.soft_attack = 0.0;
         a.hard_attack = 0.0;
         let _a_id = w.add_division(a);
-        // 战斗: 省2, A 攻 D 守
         w.battles.push(Battle {
             id: 0, province: 2,
             attackers: vec![_a_id], defenders: vec![d_id],
@@ -751,34 +748,31 @@ mod tests {
         resolve_all_battles(&mut w);
 
         let div = w.divisions.get(&d_id).expect("D 应存活");
-        // 核心断言: 撤退瞬间 location 改成目的地省3
-        assert_eq!(
-            div.location_province, 3,
-            "战败撤退时 location 应立刻变撤退目的地省3(当前={})",
-            div.location_province
-        );
-        assert_eq!(div.destination, Some(3), "destination 仍指向省3(行军中)");
-        assert!(div.retreating, "应标 retreating");
-        assert!(div.move_progress < 1e-9, "撤退从进度0开始");
+        // 新语义: 守方转 Retreating, location 保持原省2(不改), dest=省3
+        assert_eq!(div.location_province, 2, "守方撤退 location 保持原省2(Retreating 不可见)");
+        assert!(div.is_withdrawing(), "应进入 Retreating 状态");
+        assert_eq!(div.retreat_dest(), Some(3), "撤退目标=省3");
     }
 
-    /// 撤退瞬间改 location 后, 若原省被友军夺回也不会影响该师(防瞬移 BUG 验证)。
-    /// 构造: D 撤退后, 模拟原省2归属变 GER, 验证 D 的 location 仍是省3(撤退目的地),
-    /// 不会因为原省归属变化而被拉回。
+    // ===== Retreating 状态对其他系统不可见(根治瞬移 BUG) =====
+    // 守方战败撤退时, location 保持原省, 转 Retreating; 其他战斗系统(check_engagements)
+    // 跳过 Retreating 的师。到达后才根据目标省状态判定 Idle/Pending/Moving。
+
+    /// 守方 D(location=省2)战败 → 转 Retreating, location 保持省2。
     #[test]
-    fn t_retreat_location_independent_of_origin_after_retreat() {
+    fn t_retreat_keeps_location_during_withdrawal() {
         let mut w = World::new();
         let mut d = inf("DEF");
         d.owner_tag = "FRA".into();
         d.location_province = 2;
-        d.origin_province = 2;
+        d.order = OrderState::Idle;
         d.org = 0.0;
         d.strength = 10.0;
         let d_id = w.add_division(d);
         let mut a = inf("ATK");
         a.owner_tag = "GER".into();
         a.location_province = 1;
-        a.origin_province = 1;
+        a.order = OrderState::Idle;
         a.soft_attack = 0.0;
         a.hard_attack = 0.0;
         let _a_id = w.add_division(a);
@@ -796,21 +790,71 @@ mod tests {
             terrain: "plains".into(), neighbors: vec![2],
         });
 
-        // 第1步: D 战败撤退 → location 变省3
         resolve_all_battles(&mut w);
-        assert_eq!(w.divisions.get(&d_id).unwrap().location_province, 3, "撤退后 location=省3");
 
-        // 第2步: 模拟原省2被友军(GER)夺回(归属变化)
+        let div = w.divisions.get(&d_id).expect("D 应存活");
+        // 核心断言: Retreating 期间 location 保持原省2(不改), 进入 Retreating 状态
+        assert_eq!(
+            div.location_province, 2,
+            "Retreating 期间 location 应保持原省2, 实际={}",
+            div.location_province
+        );
+        assert!(div.is_withdrawing(), "应进入 Retreating");
+        assert_eq!(div.retreat_dest(), Some(3), "撤退目标=省3");
+        assert!(div.move_progress() < 1e-9, "撤退从进度0开始");
+    }
+
+    /// Retreating 的师对 check_engagements 不可见: 即便原省归属变化, 也不会被重新拉入战斗。
+    #[test]
+    fn t_retreating_invisible_to_check_engagements() {
+        let mut w = World::new();
+        let mut d = inf("DEF");
+        d.owner_tag = "FRA".into();
+        d.location_province = 2;
+        d.order = OrderState::Idle;
+        d.org = 0.0;
+        d.strength = 10.0;
+        let d_id = w.add_division(d);
+        let mut a = inf("ATK");
+        a.owner_tag = "GER".into();
+        a.location_province = 1;
+        a.order = OrderState::Idle;
+        a.soft_attack = 0.0;
+        a.hard_attack = 0.0;
+        let _a_id = w.add_division(a);
+        w.battles.push(Battle {
+            id: 0, province: 2,
+            attackers: vec![_a_id], defenders: vec![d_id],
+            ..Default::default()
+        });
+        w.provinces.insert(2, crate::runtime::Province {
+            id: 2, owner: "FRA".into(), controller: "FRA".into(),
+            terrain: "plains".into(), neighbors: vec![3],
+        });
+        w.provinces.insert(3, crate::runtime::Province {
+            id: 3, owner: "FRA".into(), controller: "FRA".into(),
+            terrain: "plains".into(), neighbors: vec![2],
+        });
+
+        // 第1步: D 战败 → 转 Retreating, location 仍=省2
+        resolve_all_battles(&mut w);
+        assert!(w.divisions.get(&d_id).unwrap().is_withdrawing(), "D 应进入 Retreating");
+
+        // 第2步: 模拟原省2 被敌军(GER)夺回(归属变化)
         w.provinces.get_mut(&2).unwrap().controller = "GER".into();
         w.provinces.get_mut(&2).unwrap().owner = "GER".into();
 
-        // 第3步: 再跑一次主循环相关阶段, D 的 location 不应变(不会瞬移回 origin)
-        // 用 check_engagements + resolve 验证 D 不被拉回省2
+        // 第3步: 跑 check_engagements — D 是 Retreating, 应被跳过, 不开新战斗
         crate::combat::movement::check_engagements(&mut w);
         let d_after = w.divisions.get(&d_id).unwrap();
+        assert!(
+            d_after.is_withdrawing(),
+            "Retreating 的师不应被 check_engagements 改变状态, 实际 order={:?}",
+            d_after.order
+        );
         assert_eq!(
-            d_after.location_province, 3,
-            "原省归属变化后, 撤退师 location 应仍=省3(防瞬移 BUG), 实际={}",
+            d_after.location_province, 2,
+            "Retreating 期间 location 不应变化, 实际={}",
             d_after.location_province
         );
     }

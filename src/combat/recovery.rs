@@ -2,6 +2,7 @@
 //!
 //! 恢复率: max_org × DAILY_ORG_RECOVERY_RATE / 24, 受补给充足度影响。
 //! 战斗中的师不恢复(在互殴)。
+use crate::runtime::entities::OrderState;
 use crate::runtime::World;
 
 /// 每日组织度恢复率(占 max_org 的比例)。约 12%/天 → 一周恢复满。
@@ -28,24 +29,22 @@ pub fn recover_org(world: &mut World) {
         if in_combat.contains(&div.id) {
             continue; // 战斗中不恢复
         }
-        // 主动行军(非撤退): org 变化取决于目标地块归属
-        // 己方地块行军 → 恢复 org(后方调动); 敌方地块行军 → 每小时 -0.2
-        if !div.retreating {
-            if let Some(dest) = div.destination {
-                let is_friendly = world.provinces.get(&dest)
-                    .map(|p| p.controller == div.owner_tag)
-                    .unwrap_or(false);
-                if !is_friendly {
-                    // 敌方地块行军: 掉 org, 不恢复
-                    div.org = (div.org + HOURLY_ORG_MOVEMENT_IMPACT).max(0.0);
-                    continue;
-                }
-                // 己方地块行军: 走到下面的恢复逻辑(不 continue)
+        // 按状态机决定 org 变化
+        // Moving 到敌方非己方地块: 每小时 -0.2, 不恢复; 其余状态恢复
+        if let OrderState::Moving { dest, hostile: true, .. } = div.order {
+            let is_friendly = world.provinces.get(&dest)
+                .map(|p| p.controller == div.owner_tag)
+                .unwrap_or(false);
+            if !is_friendly {
+                div.org = (div.org + HOURLY_ORG_MOVEMENT_IMPACT).max(0.0);
+                continue;
             }
         }
-        // 撤退中 或 静止非战斗: 恢复 org(撤退是脱离战斗休整)
+        // 恢复 org; Retreating 满血时转 Idle
         if div.org >= div.max_org {
-            div.retreating = false; // 恢复满, 清撤退标志
+            if div.is_withdrawing() {
+                div.order = OrderState::Idle; // 撤退师恢复满, 退出撤退态
+            }
             continue;
         }
         let hourly = div.max_org * DAILY_ORG_RECOVERY_RATE / 24.0;

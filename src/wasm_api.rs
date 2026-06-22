@@ -276,16 +276,22 @@ fn serialize_state(world: &World) -> String {
             s.push(',');
         }
         first = false;
+        // enum 拍平为原 JSON 键(JS 端零改动)
+        use crate::runtime::entities::OrderState;
+        let (dest, pending, progress, supporting, attacking, retreating) = match &d.order {
+            OrderState::Idle => (0u32, 0u32, 0.0, 0u32, false, false),
+            OrderState::Moving { dest, progress, hostile, .. } => (*dest, 0, *progress, 0, *hostile, false),
+            OrderState::Retreating { dest, progress } => (*dest, 0, *progress, 0, false, true),
+            OrderState::Pending { dest } => (0, *dest, 0.0, 0, false, false),
+            OrderState::Supporting { target } => (0, 0, 0.0, *target, false, false),
+        };
         s.push_str(&format!(
             "{{\"id\":{},\"owner\":\"{}\",\"org\":{:.1},\"max_org\":{:.0},\"str\":{:.1},\"max_str\":{:.0},\"eq_ratio\":{:.2},\"mp_ratio\":{:.2},\"loc\":{},\"dest\":{},\"pending\":{},\"progress\":{:.3},\"supporting\":{},\"attacking\":{},\"retreating\":{},\"annihilated\":{}}}",
             d.id, d.owner_tag, d.org, d.max_org, d.strength, d.max_strength,
             d.equipment_ratio_only(), d.manpower_ratio(),
             d.location_province,
-            d.destination.unwrap_or(0),
-            d.pending_arrival.unwrap_or(0),
-            d.move_progress,
-            d.supporting.unwrap_or(0),
-            d.attacking, d.retreating, d.is_annihilated()
+            dest, pending, progress, supporting,
+            attacking, retreating, d.is_annihilated()
         ));
     }
     s.push_str("],\"battles\":[");

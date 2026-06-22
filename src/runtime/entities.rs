@@ -20,6 +20,30 @@ pub struct Country {
     pub manpower_pool: f64,
 }
 
+/// 行动状态机(替代原 7 个扁平字段 retreating/destination/move_progress/attacking/
+/// origin_province/pending_arrival/supporting)。
+///
+/// 设计要点:
+/// - Retreating 期间对其他战斗系统(check_engagements/占地)不可见
+/// - location_province 在 Retreating/Moving 期间保持出发地原值, 到达才更新
+/// - 攻方失败回 origin 时若 origin 已非己方 → 找邻省 → 都没有则歼灭(根治瞬移)
+#[derive(Debug, Clone, Default)]
+pub enum OrderState {
+    /// 静止、非战斗(可作守方被拉入战斗, 但本身无主动指令)
+    #[default]
+    Idle,
+    /// 主动行军: dest=目标省, progress=0..1, hostile=是否进军敌方地块(红箭头), origin=出发地
+    Moving { dest: u32, progress: f64, hostile: bool, origin: u32 },
+    /// 撤退行军: dest=撤退目标(己方省), progress=0..1
+    /// 对其他战斗系统不可见(check_engagements/占地判定跳过此状态的师)
+    /// location_province 在 Retreating 期间保持撤退开始时的原值, 到达才改
+    Retreating { dest: u32, progress: f64 },
+    /// 到达目标但战斗未胜, 等战斗胜利才结算归属
+    Pending { dest: u32 },
+    /// 支援攻击: 不移动, 作为攻方远程参战 target 省的战斗
+    Supporting { target: u32 },
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Division {
     pub id: u64,
@@ -45,20 +69,8 @@ pub struct Division {
     // 人力(陆战循环): 独立于装备的兵员资源
     pub manpower_need: f64,
     pub manpower_held: f64,
-    // 撤退标志: org 归零但 HP 有余 → 撤退(保留师, 移出战斗, 待撤邻省)
-    pub retreating: bool,
-    // 行军状态: 目标省(None=静止), 进度(0-1, 到1完成移动)
-    pub destination: Option<u32>,
-    pub move_progress: f64,
-    /// 进攻移动(红箭头): 目标省有敌军, 战斗+移动并行
-    pub attacking: bool,
-    /// 出发地(行军开始时的省份, 同出发地判定预备队用; 到达后保持)
-    pub origin_province: u32,
-    /// 待到达: 进度满但战斗未胜, 等战斗胜利后才结算归属
-    pub pending_arrival: Option<u32>,
-    /// 支援攻击目标省(有值 = 正在支援攻击该省)。师不移动, 作为攻方远程参战。
-    /// 下令时目标省须已有战斗, 否则指令无效。战斗结束/战败时自动清除。
-    pub supporting: Option<u32>,
+    /// 行动状态机(替代原 7 个扁平字段)
+    pub order: OrderState,
 }
 
 impl Division {
@@ -73,14 +85,76 @@ impl Division {
     pub fn is_annihilated(&self) -> bool {
         self.strength <= 0.0
     }
-    /// 组织度归零 + HP 有余 → 撤退(保留师, 移出战斗恢复)
-    /// 注意: 这是触发撤退的瞬间条件; 撤退后 retreating 标志持续, org 可能恢复
-    pub fn is_retreating(&self) -> bool {
+    /// 是否满足进入撤退的条件(瞬时判定: org 归零 + HP 有余)。
+    /// 注意: 这是"应否撤退"的触发条件, 与"是否已在 Retreating 状态"(is_withdrawing)不同。
+    pub fn should_withdraw(&self) -> bool {
         self.org <= 0.0 && self.strength > 0.0
     }
-    /// 已退出战斗(撤退中 或 歼灭) — 兼容旧调用
+    /// 兼容别名(= should_withdraw)。迁移期保留, 迁移完成后改调用点为 should_withdraw。
+    pub fn is_retreating(&self) -> bool {
+        self.should_withdraw()
+    }
+    /// 当前是否处于撤退行军状态(读 enum)
+    pub fn is_withdrawing(&self) -> bool {
+        matches!(self.order, OrderState::Retreating { .. })
+    }
+    /// 当前是否在主动行军(Moving)
+    pub fn is_moving(&self) -> bool {
+        matches!(self.order, OrderState::Moving { .. })
+    }
+    pub fn is_supporting(&self) -> bool {
+        matches!(self.order, OrderState::Supporting { .. })
+    }
+    pub fn is_pending(&self) -> bool {
+        matches!(self.order, OrderState::Pending { .. })
+    }
+    pub fn is_idle(&self) -> bool {
+        matches!(self.order, OrderState::Idle)
+    }
+    /// 撤退目的地(Retreating 时有值)
+    pub fn retreat_dest(&self) -> Option<u32> {
+        if let OrderState::Retreating { dest, .. } = self.order {
+            Some(dest)
+        } else {
+            None
+        }
+    }
+    pub fn move_dest(&self) -> Option<u32> {
+        if let OrderState::Moving { dest, .. } = self.order {
+            Some(dest)
+        } else {
+            None
+        }
+    }
+    pub fn pending_dest(&self) -> Option<u32> {
+        if let OrderState::Pending { dest } = self.order {
+            Some(dest)
+        } else {
+            None
+        }
+    }
+    /// 当前行军的出发地(Moving 时有值)
+    pub fn move_origin(&self) -> Option<u32> {
+        if let OrderState::Moving { origin, .. } = self.order {
+            Some(origin)
+        } else {
+            None
+        }
+    }
+    /// 当前是否在进军敌方地块(红箭头)
+    pub fn is_attacking_move(&self) -> bool {
+        matches!(self.order, OrderState::Moving { hostile: true, .. })
+    }
+    /// 行军进度(0..1), Moving/Retreating 有值
+    pub fn move_progress(&self) -> f64 {
+        match self.order {
+            OrderState::Moving { progress, .. } | OrderState::Retreating { progress, .. } => progress,
+            _ => 0.0,
+        }
+    }
+    /// 已退出战斗(撤退中 或 歼灭)
     pub fn is_broken(&self) -> bool {
-        self.retreating || self.is_annihilated()
+        self.is_withdrawing() || self.is_annihilated()
     }
     /// 综合补给充足度(0-1): min(装备比, 人力比)。木桶效应, 短板决定。
     /// (原名 equipment_ratio, 保留以兼容调用; 实为四量模型的综合充足度)

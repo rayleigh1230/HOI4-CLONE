@@ -2,6 +2,7 @@
 use hoi4_clone::ast::lower::lower_effects;
 use hoi4_clone::commands::register_all;
 use hoi4_clone::parser::{parse, Value};
+use hoi4_clone::runtime::entities::OrderState;
 use hoi4_clone::runtime::{GameClock, Interpreter, Registry, World};
 
 /// 从脚本块中取出名为 key 的子块
@@ -511,8 +512,10 @@ fn marching_division_loses_org() {
     "#);
     let did = world.divisions.values().next().unwrap().id;
     let org_before = world.divisions.get(&did).unwrap().org;
-    // 手动设 destination 让师移动
-    world.divisions.get_mut(&did).unwrap().destination = Some(2);
+    // 手动设 Moving 让师移动(目标省2=敌方, hostile=true)
+    world.divisions.get_mut(&did).unwrap().order = OrderState::Moving {
+        dest: 2, progress: 0.0, hostile: true, origin: 1,
+    };
     GameClock::advance(&interp, &mut world, 3); // 移动中 3 小时
     let org_after = world.divisions.get(&did).unwrap().org;
     assert!(
@@ -545,7 +548,9 @@ fn marching_in_friendly_territory_no_org_loss() {
     "#);
     let did = world.divisions.values().next().unwrap().id;
     let org_before = world.divisions.get(&did).unwrap().org;
-    world.divisions.get_mut(&did).unwrap().destination = Some(2); // 移向己方省2
+    world.divisions.get_mut(&did).unwrap().order = OrderState::Moving {
+        dest: 2, progress: 0.0, hostile: false, origin: 1,
+    }; // 移向己方省2
     GameClock::advance(&interp, &mut world, 3);
     let org_after = world.divisions.get(&did).unwrap().org;
     assert!(
@@ -575,7 +580,7 @@ fn move_to_enemy_province_starts_battle_immediately() {
     );
     interp.run(&move_effs, &mut world);
     assert_eq!(world.battles.len(), 1, "下令移到敌省应立刻开战");
-    assert!(world.divisions.get(&ger_id).unwrap().attacking, "应处于进攻移动状态");
+    assert!(world.divisions.get(&ger_id).unwrap().is_attacking_move(), "应处于进攻移动状态");
 }
 
 #[test]
@@ -597,7 +602,7 @@ fn move_to_empty_province_no_battle() {
     );
     interp.run(&move_effs, &mut world);
     assert_eq!(world.battles.len(), 0, "移到己方空省不应开战");
-    assert!(!world.divisions.get(&ger_id).unwrap().attacking, "应非进攻状态");
+    assert!(!world.divisions.get(&ger_id).unwrap().is_attacking_move(), "应非进攻状态");
     // 推进到达
     use hoi4_clone::runtime::GameClock;
     GameClock::advance(&interp, &mut world, 100);
@@ -633,7 +638,7 @@ fn march_into_empty_enemy_province_captures() {
     );
     interp.run(&move_effs, &mut world);
     // 应是进军(红), 无敌军不开战
-    assert!(world.divisions.get(&ger_id).unwrap().attacking, "进军敌方地块应红箭头");
+    assert!(world.divisions.get(&ger_id).unwrap().is_attacking_move(), "进军敌方地块应红箭头");
     assert_eq!(world.battles.len(), 0, "无防御部队不应开战");
     // 推进到达(进军速度慢, 给足时间)
     GameClock::advance(&interp, &mut world, 100);
@@ -770,7 +775,7 @@ fn retreating_division_not_reengaged_by_check_engagements() {
             panic!("FRA 被歼灭删除于 tick {h} — 撤退师不应被歼灭(回归 bug 复现)");
         }
         let fra = fra.unwrap();
-        if str_when_retreat_started.is_none() && fra.retreating {
+        if str_when_retreat_started.is_none() && fra.is_withdrawing() {
             str_when_retreat_started = Some(fra.strength);
             eprintln!("tick {h}: FRA 开始撤退, str={:.1}", fra.strength);
         }
@@ -814,14 +819,14 @@ fn retreating_into_enemy_occupied_province_starts_battle() {
     // FRA 师在省1, 撤退中, 目标省20, 进度几乎满(1次 advance 即到达)
     let fra = world.add_division(hoi4_clone::runtime::entities::Division {
         owner_tag: "FRA".into(), location_province: 1,
-        destination: Some(20), origin_province: 1,
-        move_progress: 0.99, retreating: true,
+        order: OrderState::Retreating { dest: 20, progress: 0.99 },
         max_org: 60.0, org: 60.0, max_strength: 20.0, strength: 20.0,
         ..Default::default()
     });
     // GER 师驻守省20(敌方占领+有部队)
     let ger = world.add_division(hoi4_clone::runtime::entities::Division {
-        owner_tag: "GER".into(), location_province: 20, origin_province: 20,
+        owner_tag: "GER".into(), location_province: 20,
+        order: OrderState::Idle,
         max_org: 60.0, org: 60.0, max_strength: 20.0, strength: 20.0,
         ..Default::default()
     });
@@ -835,10 +840,10 @@ fn retreating_into_enemy_occupied_province_starts_battle() {
         "撤退师到达敌方驻军省不应直接占领(当前 controller={})",
         prov20.controller
     );
-    // 核心断言2: 撤退师进入 pending_arrival(等开战), 且清除了 retreating(即将变攻方)
+    // 核心断言2: 撤退师进入 Pending(等开战), 不再是 Retreating(即将变攻方)
     let fra_div = world.divisions.get(&fra).unwrap();
-    assert_eq!(fra_div.pending_arrival, Some(20), "应进入 pending_arrival 等开战");
-    assert!(!fra_div.retreating, "撤退师到达敌方省应清 retreating(即将变攻方)");
+    assert_eq!(fra_div.pending_dest(), Some(20), "应进入 Pending 等开战");
+    assert!(!fra_div.is_withdrawing(), "撤退师到达敌方省应退出 Retreating(即将变攻方)");
 
     // check_engagements → 应开战(FRA 变攻方, GER 守)
     check_engagements(&mut world);
@@ -869,16 +874,16 @@ fn retreating_to_enemy_province_then_loses_continues_retreat_or_dies() {
     // FRA 师: org很低(刚被打崩), 撤退到省20(GER驻军). 它会变攻方但打不过.
     let fra = world.add_division(hoi4_clone::runtime::entities::Division {
         owner_tag: "FRA".into(), location_province: 1,
-        destination: Some(20), origin_province: 1,
-        move_progress: 0.99, retreating: true,
-        max_org: 60.0, org: 5.0, // org很低, 一打就崩
+        order: OrderState::Retreating { dest: 20, progress: 0.99 },
+        max_org: 60.0, org: 1.0, // org 极低, GER 反击一击即崩
         max_strength: 20.0, strength: 20.0,
         soft_attack: 5.0, defense: 10.0,
         ..Default::default()
     });
     // GER 师: 强势守省20
     let _ger = world.add_division(hoi4_clone::runtime::entities::Division {
-        owner_tag: "GER".into(), location_province: 20, origin_province: 20,
+        owner_tag: "GER".into(), location_province: 20,
+        order: OrderState::Idle,
         max_org: 60.0, org: 60.0, max_strength: 20.0, strength: 20.0,
         soft_attack: 50.0, defense: 40.0,
         ..Default::default()
@@ -892,7 +897,9 @@ fn retreating_to_enemy_province_then_loses_continues_retreat_or_dies() {
     let battle_started = world.battles.iter().any(|b| b.province == 20);
     assert!(battle_started, "省20应有战斗(FRA变攻方)");
 
-    // 第3步: resolve → FRA org被打崩 → cleanup 攻方撤退 → 回origin(省1)
+    // 第3步: resolve → FRA org被打崩 → cleanup 攻方战败
+    // 新语义: FRA 撤退到省20(RetreatIntoEnemy) → 归属地强制=省20 → 变攻方战败
+    //   → 归属地省20 是 GER(敌方) → 进 Retreating 撤向邻省省1(行军)
     resolve_all_battles(&mut world);
 
     // 核心: FRA 不应占领省20(它败了)
@@ -900,11 +907,12 @@ fn retreating_to_enemy_province_then_loses_continues_retreat_or_dies() {
         world.provinces.get(&20).unwrap().controller, "GER",
         "FRA 战败, 省20 应仍属 GER"
     );
-    // FRA 应存活(攻方撤退回 origin=省1, 非歼灭, 因省1是FRA己方)
+    // FRA 应存活: 攻方战败, 归属地省20(GER)非己方 → 进 Retreating 撤向邻省省1
     let fra_div = world.divisions.get(&fra);
-    assert!(fra_div.is_some(), "FRA 战败应撤退保留(回origin省1), 不应歼灭");
+    assert!(fra_div.is_some(), "FRA 战败应存活(转 Retreating), 不应歼灭");
     let fra_div = fra_div.unwrap();
-    assert_eq!(fra_div.location_province, 1, "FRA 应回到 origin 省1");
+    assert!(fra_div.is_withdrawing(), "FRA 应转 Retreating 撤向省1, 实际 order={:?}", fra_div.order);
+    assert_eq!(fra_div.retreat_dest(), Some(1), "撤退目标应为邻省省1");
     assert!(fra_div.strength > 0.0, "FRA 应存活 str>0");
 }
 
@@ -937,7 +945,7 @@ fn support_attack_invalid_when_no_battle() {
     // GER 支援攻击省1(此刻无战斗) → 指令无效
     run_cmd(&mut world, &interp, "support_attack = { division = 1 target = 1 }");
 
-    assert_eq!(world.divisions.get(&ger_id).unwrap().supporting, None, "无战斗时 supporting 不应设置");
+    assert!(!world.divisions.get(&ger_id).unwrap().is_supporting(), "无战斗时不应进入 Supporting");
     assert!(world.battles.is_empty(), "无战斗时不应新建战斗");
 }
 
@@ -968,11 +976,11 @@ fn support_attack_joins_existing_battle_without_moving() {
     run_cmd(&mut world, &interp, &format!("support_attack = {{ division = {} target = 1 }}", support_id));
 
     let sup = world.divisions.get(&support_id).unwrap();
-    assert_eq!(sup.supporting, Some(1), "supporting 应设为省1");
+    assert!(sup.is_supporting(), "应进入 Supporting 状态");
     // 规则2: 师不移动
     assert_eq!(sup.location_province, 2, "支援师 location 不变(仍在省2)");
-    assert!(sup.destination.is_none(), "支援师 destination 不设(不移动)");
-    assert!((sup.move_progress - 0.0).abs() < 1e-9, "支援师进度不变");
+    assert!(!sup.is_moving(), "支援师不进入 Moving(不移动)");
+    assert!((sup.move_progress() - 0.0).abs() < 1e-9, "支援师进度不变");
     // 规则3: 加入战斗攻方
     let battle = &world.battles[0];
     assert!(
@@ -1045,15 +1053,15 @@ fn support_attack_auto_cancels_when_battle_ends() {
         .filter(|d| d.owner_tag == "GER" && d.location_province == 10)
         .map(|d| d.id).next().unwrap();
     run_cmd(&mut world, &interp, &format!("support_attack = {{ division = {} target = 1 }}", sup_id));
-    assert_eq!(world.divisions.get(&sup_id).unwrap().supporting, Some(1), "应已设支援");
+    assert!(world.divisions.get(&sup_id).unwrap().is_supporting(), "应已设支援");
 
     // 推进让 FRA 破阵、战斗结束
     GameClock::advance(&interp, &mut world, 30);
 
     assert_eq!(world.battles.len(), 0, "战斗应已结束");
-    assert_eq!(
-        world.divisions.get(&sup_id).unwrap().supporting, None,
-        "战斗结束后 supporting 应自动清除"
+    assert!(
+        !world.divisions.get(&sup_id).unwrap().is_supporting(),
+        "战斗结束后应自动退出 Supporting"
     );
 }
 
@@ -1121,8 +1129,8 @@ fn support_only_does_not_capture_province() {
         .filter(|d| d.owner_tag == "GER").map(|d| d.id).next().unwrap();
     let fra_id = world.divisions.values()
         .filter(|d| d.owner_tag == "FRA").map(|d| d.id).next().unwrap();
-    // 支援师: location=省10, supporting=省1
-    world.divisions.get_mut(&sup_id).unwrap().supporting = Some(1);
+    // 支援师: location=省10, Supporting 省1
+    world.divisions.get_mut(&sup_id).unwrap().order = OrderState::Supporting { target: 1 };
     // FRA 守方: org 归零(将被判定撤退 → 前线崩)
     world.divisions.get_mut(&fra_id).unwrap().org = 0.0;
     // 构造省1战斗: 只有支援师作攻方, FRA 作守方
@@ -1159,13 +1167,12 @@ fn stop_cancels_march_destination() {
     let did = world.divisions.values().next().unwrap().id;
     // 下移动令: 省1→省10(己方)
     run_cmd(&mut world, &interp, "move_division = { division = 1 target = 10 }");
-    assert!(world.divisions.get(&did).unwrap().destination.is_some(), "应已下令移动");
+    assert!(world.divisions.get(&did).unwrap().is_moving(), "应已下令移动");
 
     // 停止
     run_cmd(&mut world, &interp, "stop_order = { division = 1 }");
     let d = world.divisions.get(&did).unwrap();
-    assert!(d.destination.is_none(), "停止后 destination 应清空");
-    assert!(!d.attacking, "停止后 attacking 应清");
+    assert!(d.is_idle(), "停止后应转 Idle");
     assert_eq!(d.location_province, 1, "师应留在当前省1");
 }
 
@@ -1190,13 +1197,13 @@ fn stop_cancels_support_attack() {
         .filter(|d| d.owner_tag == "GER" && d.location_province == 10)
         .map(|d| d.id).next().unwrap();
     run_cmd(&mut world, &interp, &format!("support_attack = {{ division = {} target = 1 }}", sup_id));
-    assert_eq!(world.divisions.get(&sup_id).unwrap().supporting, Some(1));
+    assert!(world.divisions.get(&sup_id).unwrap().is_supporting(), "应已设支援");
     assert!(world.battles[0].attackers.contains(&sup_id) || world.battles[0].reserve_attackers.contains(&sup_id));
 
     // 停止支援
     run_cmd(&mut world, &interp, &format!("stop_order = {{ division = {} }}", sup_id));
     let d = world.divisions.get(&sup_id).unwrap();
-    assert_eq!(d.supporting, None, "停止后 supporting 应清空");
+    assert!(!d.is_supporting(), "停止后应退出 Supporting");
     assert!(!world.battles[0].attackers.contains(&sup_id), "停止后应从 attackers 移除");
     assert!(!world.battles[0].reserve_attackers.contains(&sup_id), "停止后应从 reserve_attackers 移除");
 }
@@ -1212,19 +1219,17 @@ fn stop_ignored_for_retreating() {
         _setup = { create_division = { owner = FRA location = 1 soft_attack = 0 defense = 5 max_org = 30 } }
     "#);
     let did = world.divisions.values().next().unwrap().id;
-    // 手动设撤退状态(destination 有值, retreating=true)
+    // 手动设撤退状态(Retreating, dest=省20, progress=0.3)
     {
         let d = world.divisions.get_mut(&did).unwrap();
-        d.retreating = true;
-        d.destination = Some(20);
-        d.move_progress = 0.3;
+        d.order = OrderState::Retreating { dest: 20, progress: 0.3 };
     }
-    // 停止(应被忽略)
+    // 停止(应被忽略: stop_order 只停 Moving/Supporting)
     run_cmd(&mut world, &interp, "stop_order = { division = 1 }");
     let d = world.divisions.get(&did).unwrap();
-    assert!(d.retreating, "撤退师 retreating 应保持");
-    assert_eq!(d.destination, Some(20), "撤退师 destination 不应被停止清除");
-    assert!((d.move_progress - 0.3).abs() < 1e-9, "撤退师进度不应变");
+    assert!(d.is_withdrawing(), "撤退师 Retreating 应保持");
+    assert_eq!(d.retreat_dest(), Some(20), "撤退师 dest 不应被停止清除");
+    assert!((d.move_progress() - 0.3).abs() < 1e-9, "撤退师进度不应变");
 }
 
 #[test]
@@ -1272,13 +1277,13 @@ fn stop_keeps_passive_defense() {
     // A 下令进军省2(敌方空省, 主动进攻) — A 在省10(战斗地块)移到省2(非己方)
     // → 不触发撤退分支(目标非己方), 走进攻逻辑
     run_cmd(&mut world, &interp, &format!("move_division = {{ division = {} target = 2 }}", a_id));
-    assert!(world.divisions.get(&a_id).unwrap().destination.is_some(), "A 应有进军令");
-    assert!(!world.divisions.get(&a_id).unwrap().retreating, "进军敌方省不应是撤退");
+    assert!(world.divisions.get(&a_id).unwrap().is_moving(), "A 应有进军令");
+    assert!(!world.divisions.get(&a_id).unwrap().is_withdrawing(), "进军敌方省不应是撤退");
 
     // 停止 A: 取消进军省2, 但保留防守省10
     run_cmd(&mut world, &interp, &format!("stop_order = {{ division = {} }}", a_id));
     let d = world.divisions.get(&a_id).unwrap();
-    assert!(d.destination.is_none(), "停止后 A 进军令应取消");
+    assert!(d.is_idle(), "停止后 A 应转 Idle(进军令取消)");
     // 关键: A 仍是省10战斗的防守方
     let battle10_after = world.battles.iter().find(|b| b.province == 10);
     assert!(battle10_after.is_some(), "省10战斗应仍存在(防守未停)");
@@ -1319,8 +1324,8 @@ fn defender_move_to_friendly_becomes_retreat() {
     // FRA 防守中下移动令到省20(己方FRA省) → 应变撤退
     run_cmd(&mut world, &interp, &format!("move_division = {{ division = {} target = 20 }}", fra_id));
     let d = world.divisions.get(&fra_id).unwrap();
-    assert!(d.retreating, "防守中移动到己方省应进入撤退状态");
-    assert_eq!(d.destination, Some(20), "撤退目标应为省20");
+    assert!(d.is_withdrawing(), "防守中移动到己方省应进入撤退状态");
+    assert_eq!(d.retreat_dest(), Some(20), "撤退目标应为省20");
     assert_eq!(d.location_province, 1, "撤退中 location 不变(行军未到达)");
     // 从战斗移除(脱离战斗)
     let battle1_after = world.battles.iter().find(|b| b.province == 1);
@@ -1353,8 +1358,8 @@ fn defender_move_to_enemy_keeps_attacking() {
     // FRA 防守中下移动令到省10(GER敌方省) → 走进攻逻辑(attacking=true), 不变撤退
     run_cmd(&mut world, &interp, &format!("move_division = {{ division = {} target = 10 }}", fra_id));
     let d = world.divisions.get(&fra_id).unwrap();
-    assert!(!d.retreating, "移动到敌方省不应变撤退(应走进攻逻辑)");
-    assert!(d.attacking || d.destination.is_some(), "应有移动/进攻指令");
+    assert!(!d.is_withdrawing(), "移动到敌方省不应变撤退(应走进攻逻辑)");
+    assert!(d.is_moving(), "应有移动指令(Moving)");
 }
 
 #[test]
@@ -1381,8 +1386,8 @@ fn attacker_on_battle_province_can_retreat_to_friendly() {
     // GER 攻方师在战斗地块, 下移动到省10(己方) → 应变撤退
     run_cmd(&mut world, &interp, &format!("move_division = {{ division = {} target = 10 }}", ger_id));
     let d = world.divisions.get(&ger_id).unwrap();
-    assert!(d.retreating, "战斗地块的攻方师下移动到己方省也应撤退(不分攻守)");
-    assert_eq!(d.destination, Some(10), "撤退目标省10");
+    assert!(d.is_withdrawing(), "战斗地块的攻方师下移动到己方省也应撤退(不分攻守)");
+    assert_eq!(d.retreat_dest(), Some(10), "撤退目标省10");
     assert_eq!(d.location_province, 1, "撤退中 location 不变");
 }
 
