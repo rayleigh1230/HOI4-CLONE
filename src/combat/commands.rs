@@ -283,10 +283,12 @@ pub fn register(reg: &mut Registry) {
         let target_controller = w.provinces.get(&target).map(|p| p.controller.as_str()).unwrap_or("");
         let is_hostile = target_controller != owner;
         // 设移动状态: 进入 Moving, 记录 origin=当前省
+        // remaining 暂为空(后续 Task 用寻路结果填充); 单段移动 = remaining 空
         if let Some(d) = w.divisions.get_mut(&div_id) {
             d.order = OrderState::Moving {
                 dest: target, progress: 0.0,
                 hostile: is_hostile, origin: cur_loc,
+                remaining: vec![],
             };
         }
         // 有敌军防守 → 开战: 加入或新建战斗(复用 join_as_attacker)

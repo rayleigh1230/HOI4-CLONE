@@ -643,7 +643,7 @@ mod tests {
         let mut a = inf("ATK");
         a.owner_tag = "GER".into();
         a.location_province = 1;
-        a.order = OrderState::Moving { dest: 2, progress: 0.0, hostile: true, origin: 1 };
+        a.order = OrderState::Moving { dest: 2, progress: 0.0, hostile: true, origin: 1, remaining: vec![] };
         // 模拟被打退: org=0, strength>0
         a.org = 0.0;
         a.strength = 10.0;

@@ -32,8 +32,9 @@ pub enum OrderState {
     /// 静止、非战斗(可作守方被拉入战斗, 但本身无主动指令)
     #[default]
     Idle,
-    /// 主动行军: dest=目标省, progress=0..1, hostile=是否进军敌方地块(红箭头), origin=出发地
-    Moving { dest: u32, progress: f64, hostile: bool, origin: u32 },
+    /// 主动行军: dest=当前段终点, progress=0..1, hostile=是否进军敌方地块(红箭头),
+    /// origin=当前段出发地, remaining=dest 之后还要去的省(多段路径, 不含 dest)
+    Moving { dest: u32, progress: f64, hostile: bool, origin: u32, remaining: Vec<u32> },
     /// 撤退行军: dest=撤退目标(己方省), progress=0..1
     /// 对其他战斗系统不可见(check_engagements/占地判定跳过此状态的师)
     /// location_province 在 Retreating 期间保持撤退开始时的原值, 到达才改

@@ -286,7 +286,7 @@ mod tests {
         let mut w = World::new();
         let d = Division {
             id: 0, owner_tag: "GER".into(), location_province: 1,
-            order: OrderState::Moving { dest: 2, progress: 0.0, hostile: false, origin: 1 },
+            order: OrderState::Moving { dest: 2, progress: 0.0, hostile: false, origin: 1, remaining: vec![] },
             ..Default::default()
         };
         let did = w.add_division(d);
@@ -306,7 +306,7 @@ mod tests {
         let mut w = World::new();
         let d1 = Division {
             id: 0, owner_tag: "X".into(), location_province: 1,
-            order: OrderState::Moving { dest: 2, progress: 0.0, hostile: false, origin: 1 },
+            order: OrderState::Moving { dest: 2, progress: 0.0, hostile: false, origin: 1, remaining: vec![] },
             ..Default::default()
         };
         let d2 = Division {
@@ -327,12 +327,12 @@ mod tests {
         let mut w = World::new();
         let d1 = Division {
             id: 0, owner_tag: "X".into(), location_province: 1,
-            order: OrderState::Moving { dest: 2, progress: 0.0, hostile: false, origin: 1 },
+            order: OrderState::Moving { dest: 2, progress: 0.0, hostile: false, origin: 1, remaining: vec![] },
             ..Default::default()
         };
         let d2 = Division {
             id: 0, owner_tag: "X".into(), location_province: 1,
-            order: OrderState::Moving { dest: 2, progress: 0.0, hostile: true, origin: 1 },
+            order: OrderState::Moving { dest: 2, progress: 0.0, hostile: true, origin: 1, remaining: vec![] },
             ..Default::default()
         };
         let id1 = w.add_division(d1);
@@ -352,7 +352,7 @@ mod tests {
         });
         let d = Division {
             id: 0, owner_tag: "GER".into(), location_province: 1,
-            order: OrderState::Moving { dest: 2, progress: 0.99, hostile: true, origin: 1 },
+            order: OrderState::Moving { dest: 2, progress: 0.99, hostile: true, origin: 1, remaining: vec![] },
             max_org: 60.0, org: 60.0,
             ..Default::default()
         };
@@ -385,13 +385,13 @@ mod tests {
         let mut a = live_div();
         a.owner_tag = "GER".into();
         a.location_province = 1;
-        a.order = OrderState::Moving { dest: 2, progress: 0.0, hostile: true, origin: 1 };
+        a.order = OrderState::Moving { dest: 2, progress: 0.0, hostile: true, origin: 1, remaining: vec![] };
         let a = w.add_division(a);
         // 师B: FRA, 在省3, 向省1进军
         let mut b = live_div();
         b.owner_tag = "FRA".into();
         b.location_province = 3;
-        b.order = OrderState::Moving { dest: 1, progress: 0.0, hostile: true, origin: 3 };
+        b.order = OrderState::Moving { dest: 1, progress: 0.0, hostile: true, origin: 3, remaining: vec![] };
         let b = w.add_division(b);
 
         check_engagements(&mut w);
@@ -416,7 +416,7 @@ mod tests {
         let mut a = live_div();
         a.owner_tag = "GER".into();
         a.location_province = 1;
-        a.order = OrderState::Moving { dest: 2, progress: 0.0, hostile: true, origin: 1 };
+        a.order = OrderState::Moving { dest: 2, progress: 0.0, hostile: true, origin: 1, remaining: vec![] };
         let a = w.add_division(a);
         // C(FRA) 在省2防守 → A vs C 战斗(省2)
         let mut c = live_div();
@@ -427,7 +427,7 @@ mod tests {
         let mut b = live_div();
         b.owner_tag = "FRA".into();
         b.location_province = 3;
-        b.order = OrderState::Moving { dest: 1, progress: 0.0, hostile: true, origin: 3 };
+        b.order = OrderState::Moving { dest: 1, progress: 0.0, hostile: true, origin: 3, remaining: vec![] };
         let b = w.add_division(b);
 
         check_engagements(&mut w);

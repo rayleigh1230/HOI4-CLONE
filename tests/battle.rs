@@ -514,7 +514,7 @@ fn marching_division_loses_org() {
     let org_before = world.divisions.get(&did).unwrap().org;
     // 手动设 Moving 让师移动(目标省2=敌方, hostile=true)
     world.divisions.get_mut(&did).unwrap().order = OrderState::Moving {
-        dest: 2, progress: 0.0, hostile: true, origin: 1,
+        dest: 2, progress: 0.0, hostile: true, origin: 1, remaining: vec![],
     };
     GameClock::advance(&interp, &mut world, 3); // 移动中 3 小时
     let org_after = world.divisions.get(&did).unwrap().org;
@@ -549,7 +549,7 @@ fn marching_in_friendly_territory_no_org_loss() {
     let did = world.divisions.values().next().unwrap().id;
     let org_before = world.divisions.get(&did).unwrap().org;
     world.divisions.get_mut(&did).unwrap().order = OrderState::Moving {
-        dest: 2, progress: 0.0, hostile: false, origin: 1,
+        dest: 2, progress: 0.0, hostile: false, origin: 1, remaining: vec![],
     }; // 移向己方省2
     GameClock::advance(&interp, &mut world, 3);
     let org_after = world.divisions.get(&did).unwrap().org;
