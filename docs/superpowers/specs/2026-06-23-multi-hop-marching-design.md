@@ -47,6 +47,7 @@
 | 11 | 边界 B(战斗中下令) | Pending/Retreating 时新移动命令被忽略(不能中断战斗/撤退) |
 | 12 | 边界 C(同省命令) | 起点终点同省 → 忽略(无意义命令) |
 | 13 | 支援攻击收敛 | `support_attack` 的 target 必须与师 `location_province` **相邻**;不相邻 → 静默无效(与"无战斗"处理一致) |
+| 14 | 路径中途失效应对 | 多段行军的师每小时检查"当前 dest 是否仍 `is_passable`";不可进入 → 停止(转 Idle,清 remaining)。另设强制中止函数 `invalidate_paths_to_inaccessible()`,供未来投降/停战事件批量调用(原版"强制中止敌对行为"的等价)。所有失效统一停止,**不重算绕路**(小地图无环,等价停止;重算留作未来大地图扩展) |
 
 ---
 
@@ -275,6 +276,64 @@ pub extern "C" fn engine_queue_move(division_id: u32, target: u32) {
 
 `engine_move_division` **无需改签名**(仍是 div_id + target),内部走新寻路逻辑。
 
+### 4.6 路径中途失效应对(决策 14)
+
+**问题**:师沿多段路径行军时,省份的可进入性可能动态变化(未来投降/停战导致对方领土变不可进入)。需要让师"不做傻事"——不闯入不可进入的省。
+
+**失效类型与统一应对**:
+
+| 失效位置 | 例子 | 应对 |
+|---|---|---|
+| 当前 dest 段(progress 未满) | 师正朝省2走,省2突然不可进入 | **停止**(转 Idle,清 remaining) |
+| 航点(玩家必经点) | 玩家设的省5不可进入 | **停止**(不能绕,绕则违背玩家意图) |
+| 终点 | 最终目标省不可进入 | **停止** |
+| 中转省(系统算的) | 寻路途经省4不可进入 | **停止**(小地图无环,重算=停止;重算留未来扩展) |
+
+**机制 1:每小时检查(轻量,主循环内置)**
+
+每个主循环 tick,在推进进度前(advance_movement 开头),检查每个多段行军师的**当前 dest** 是否仍 `is_passable`:
+```
+advance_movement 开头(新增第 0 步):
+    for 每个 Moving 师的 (id, dest):
+        if !is_passable(world, dest):
+            师转 Idle,清 remaining(路径停止)
+            // 不从攻方角色移除(此时师不在战斗里,dest 不可进说明无战斗)
+```
+
+只查 dest(当前正在去的省),不扫整条 remaining——因为师还没走到后面的省,那些省的状态等走到时再查。这避免每 tick 扫整条路径(性能),且语义正确(只关心"下一步能不能迈")。
+
+**机制 2:强制中止函数(供未来事件调用)**
+
+```rust
+/// 强制中止所有路径涉及不可进入省的师(转 Idle)。
+/// 供未来投降/停战/领土移交事件批量调用 —— 即原版"强制中止敌对行为"的等价。
+/// 扫描所有 Moving 师的 dest + remaining,任一不可进入则整条路径作废。
+pub fn invalidate_paths_to_inaccessible(world: &mut World) {
+    for d in world.divisions.values_mut() {
+        if let OrderState::Moving { dest, ref remaining, .. } = d.order {
+            let blocked = !is_passable(world, dest)
+                || remaining.iter().any(|&p| !is_passable(world, p));
+            if blocked {
+                d.order = OrderState::Idle;  // 清 remaining(Moving→Idle)
+            }
+        }
+    }
+}
+```
+
+与机制 1 的区别:机制 1 只查 dest(逐 tick 渐进),机制 2 扫整条路径(事件触发时一次性)。投降事件用机制 2 立刻清场,不等师逐站走到失效点。
+
+**为什么不重算绕路**:
+- 小地图是线性链,中转省失效 = 整条路断,重算也找不到新路 = 等价停止
+- 重算需要地图有环(多点连通),当前地图不具备
+- 写了重算逻辑也是 dead code,徒增复杂度
+- **未来扩展**:地图加环后,把"中转省失效→停止"升级为"→重新 find_path"是一处改动(advance_movement 第 0 步 + invalidate 函数),架构已为此预留
+
+**触发源现状**:
+- `is_passable` 现在恒 true → 上述两机制**当前不会触发任何停止**(没有省会变不可进入)
+- 机制就位,等未来投降/停战系统接入 `is_passable` 的真实判定后自然生效
+- 测试时临时 mock `is_passable` 返回 false 验证停止行为(决策 14 的测试用此方式)
+
 ---
 
 ## 5. 行军推进变更(`src/combat/movement.rs`)
@@ -407,6 +466,8 @@ engine_queue_move(divId, targetProvince)
 | `t_find_path_no_route_ignored` | 寻路失败 → 师不动 |
 | `t_support_attack_non_adjacent_ignored` | 决策13:支援攻击 target 不相邻 → 静默无效(不设 Supporting) |
 | `t_support_attack_adjacent_works` | 相邻 + 有战斗 → 正常支援(回归,确保邻接检查不误伤合法支援) |
+| `t_path_stops_when_dest_inaccessible` | 决策14机制1:多段行军途中,dest 突然不可进入(mock is_passable)→ 师转 Idle,remaining 清空 |
+| `t_invalidate_paths_clears_blocked` | 决策14机制2:invalidate_paths_to_inaccessible 扫描,dest 或 remaining 任一不可进入 → 整条路径停止 |
 
 ---
 
@@ -418,7 +479,7 @@ engine_queue_move(divId, targetProvince)
 | `src/combat/pathfinding.rs` | **新文件**:`find_path` + `is_passable` + `edge_weight` |
 | `src/combat/mod.rs` | 声明 `pub mod pathfinding;` |
 | `src/combat/commands.rs` | `move_division` 加寻路;新增 `queue_move` 命令注册;`support_attack` 加邻接检查(决策13) |
-| `src/combat/movement.rs` | `advance_movement` 到达后续走逻辑;`Arrival` 加 remaining;辅助函数 `continue_path_if_any` |
+| `src/combat/movement.rs` | `advance_movement` 到达后续走逻辑 + 开头加 dest 可进入性检查(决策14机制1);`Arrival` 加 remaining;辅助函数 `continue_path_if_any`;`invalidate_paths_to_inaccessible`(决策14机制2) |
 | `src/wasm_api.rs` | 新增 `engine_queue_move` FFI |
 | `tests/battle.rs`(或新文件) | 补 `remaining: vec![]` 到现有 Moving 构造;加多段测试 |
 
