@@ -973,12 +973,12 @@ fn support_attack_joins_existing_battle_without_moving() {
             start_battle = { attacker = GER defender = FRA province = 1 }
         }
     "#);
-    // 在省2部署一支援师(GER), 支援省1(已有战斗)
+    // 在省10部署一支援师(GER, 与省1相邻), 支援省1(已有战斗)
     run_setup(&mut world, &interp, r#"
-        _setup = { create_division = { owner = GER location = 2 equipment = infantry_equipment battalions = 7 } }
+        _setup = { create_division = { owner = GER location = 10 equipment = infantry_equipment battalions = 7 } }
     "#);
     let support_id = world.divisions.values()
-        .filter(|d| d.owner_tag == "GER" && d.location_province == 2)
+        .filter(|d| d.owner_tag == "GER" && d.location_province == 10)
         .map(|d| d.id).next().unwrap();
     assert_eq!(world.battles.len(), 1, "应已有1场战斗");
 
@@ -987,7 +987,7 @@ fn support_attack_joins_existing_battle_without_moving() {
     let sup = world.divisions.get(&support_id).unwrap();
     assert!(sup.is_supporting(), "应进入 Supporting 状态");
     // 规则2: 师不移动
-    assert_eq!(sup.location_province, 2, "支援师 location 不变(仍在省2)");
+    assert_eq!(sup.location_province, 10, "支援师 location 不变(仍在省10)");
     assert!(!sup.is_moving(), "支援师不进入 Moving(不移动)");
     assert!((sup.move_progress() - 0.0).abs() < 1e-9, "支援师进度不变");
     // 规则3: 加入战斗攻方
@@ -1014,15 +1014,15 @@ fn support_attack_same_origin_goes_reserve() {
             start_battle = { attacker = GER defender = FRA province = 1 }
         }
     "#);
-    // 两个 GER 支援师都在省2(同 origin)
+    // 两个 GER 支援师都在省10(同 origin, 与省1相邻)
     run_setup(&mut world, &interp, r#"
         _setup = {
-            create_division = { owner = GER location = 2 equipment = infantry_equipment battalions = 7 }
-            create_division = { owner = GER location = 2 equipment = infantry_equipment battalions = 7 }
+            create_division = { owner = GER location = 10 equipment = infantry_equipment battalions = 7 }
+            create_division = { owner = GER location = 10 equipment = infantry_equipment battalions = 7 }
         }
     "#);
     let sup_ids: Vec<u64> = world.divisions.values()
-        .filter(|d| d.owner_tag == "GER" && d.location_province == 2)
+        .filter(|d| d.owner_tag == "GER" && d.location_province == 10)
         .map(|d| d.id).collect();
     // 第一个支援(同 origin 无其他支援师)→ 前线
     run_cmd(&mut world, &interp, &format!("support_attack = {{ division = {} target = 1 }}", sup_ids[0]));
@@ -1549,4 +1549,35 @@ fn t_find_path_no_route_ignored() {
     let did = *world.divisions.keys().next().unwrap();
     run_cmd(&mut world, &interp, &format!("move_division = {{ division = {did} target = 99 }}"));
     assert!(world.divisions.get(&did).unwrap().is_idle(), "寻路失败应忽略, 保持 Idle");
+}
+
+#[test]
+fn support_attack_invalid_when_non_adjacent() {
+    // 决策13: 目标省与师 location 不相邻 → 静默无效(不设 Supporting)
+    let mut reg = Registry::new();
+    register_all(&mut reg);
+    let interp = Interpreter::new(reg);
+    let mut world = setup_world(); // 省1(neighbors:10,20), 省10(neighbors:1), 省20(neighbors:1)
+    // 在省10 建 GER 师, 省1 有 FRA 师 + 战斗
+    run_setup(&mut world, &interp, r#"
+        _setup = {
+            create_division = { owner = GER location = 10 equipment = infantry_equipment battalions = 7 }
+            create_division = { owner = FRA location = 1 equipment = infantry_equipment battalions = 7 }
+            start_battle = { attacker = GER defender = FRA province = 1 }
+        }
+    "#);
+    let ger_id = world.divisions.values().find(|d| d.owner_tag == "GER").map(|d| d.id).unwrap();
+    // GER 师在省10, 支援省1(相邻) — 应成功(回归, 确保邻接检查不误伤合法支援)
+    run_cmd(&mut world, &interp, &format!("support_attack = {{ division = {ger_id} target = 1 }}"));
+    assert!(world.divisions.get(&ger_id).unwrap().is_supporting(), "相邻省支援应成功");
+    // 先停止, 重置
+    run_cmd(&mut world, &interp, &format!("stop_order = {{ division = {ger_id} }}"));
+    // 加一个省 30(与省10 不相邻, 孤立)
+    world.provinces.insert(30, hoi4_clone::runtime::Province {
+        id: 30, owner: "FRA".into(), controller: "FRA".into(),
+        terrain: "plains".into(), neighbors: vec![],
+    });
+    // 支援省30(与省10 不相邻) — 应静默无效
+    run_cmd(&mut world, &interp, &format!("support_attack = {{ division = {ger_id} target = 30 }}"));
+    assert!(!world.divisions.get(&ger_id).unwrap().is_supporting(), "不相邻省支援应无效");
 }

@@ -317,11 +317,22 @@ pub fn register(reg: &mut Registry) {
     });
 
     // 支援攻击: 师不移动, 作为攻方远程参与目标省战斗。
-    // 规则: 下令时目标省须已有战斗, 否则指令无效(静默取消, 不设 supporting)。
+    // 规则: 下令时目标省须已有战斗 且 与师 location 相邻, 否则指令无效(静默取消)。
     // 其他判定(加入战斗/伤害/宽度)与移动攻击一致。
     reg.register("support_attack", |w, p| {
         let div_id = num_of(np(p, "support_attack", "division")?)? as u64;
         let target = num_of(np(p, "support_attack", "target")?)? as u32;
+        // 【决策13】邻接检查: 目标省须与师 location 相邻, 否则静默无效
+        let cur_loc = match w.divisions.get(&div_id) {
+            Some(d) => d.location_province,
+            None => return Ok(()),
+        };
+        let adjacent = w.provinces.get(&cur_loc)
+            .map(|p| p.neighbors.contains(&target))
+            .unwrap_or(false);
+        if !adjacent {
+            return Ok(()); // 不相邻, 静默无效
+        }
         // 检查目标省是否已有战斗(下单时判定; 无战斗 → 指令无效)
         let has_battle = w.battles.iter().any(|b| b.province == target);
         if !has_battle {
