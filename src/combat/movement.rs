@@ -98,7 +98,7 @@ pub fn advance_movement(world: &mut World) {
         .collect();
 
     // 第一阶段: 推进进度; 进度满的师收集"到达候选"(快照模式避免借用冲突)
-    struct Arrival { id: u64, dest: u32, owner: String }
+    struct Arrival { id: u64, dest: u32, owner: String, remaining: Vec<u32> }
     enum ArrivalDecision {
         // 到达非己方空省 → 直接占领
         Capture(Arrival),
@@ -116,9 +116,9 @@ pub fn advance_movement(world: &mut World) {
                 .chain(b.reserve_attackers.iter()).chain(b.reserve_defenders.iter()).copied())
             .collect();
 
-        // 第一阶段a: 推进进度, 收集到达候选 (id, dest, owner, was_retreat)
+        // 第一阶段a: 推进进度, 收集到达候选 (id, dest, owner, was_retreat, remaining)
         // 进度条是物理移动, 照常推进(战斗中只是变慢, hostile×0.33)。
-        let mut arrived: Vec<(u64, u32, String, bool)> = Vec::new();
+        let mut arrived: Vec<(u64, u32, String, bool, Vec<u32>)> = Vec::new();
         for id in moving_ids {
             let Some(d) = world.divisions.get_mut(&id) else { continue };
             // 按状态决定速度系数
@@ -146,18 +146,20 @@ pub fn advance_movement(world: &mut World) {
                 if in_battle.contains(&id) && d.is_moving() {
                     continue; // 不收集为到达候选, 进度保持满值
                 }
-                // 取出 dest + owner + 是否撤退, 把状态置为 Idle(后续第二阶段根据判定改写)
-                let (dest, owner, was_retreat) = match d.order {
-                    OrderState::Moving { dest, .. } => (dest, d.owner_tag.clone(), false),
-                    OrderState::Retreating { dest, .. } => (dest, d.owner_tag.clone(), true),
+                // 取出 dest + owner + 是否撤退 + 剩余路径, 把状态置为 Idle(后续第二阶段根据判定改写)
+                let (dest, owner, was_retreat, remaining) = match d.order {
+                    OrderState::Moving { dest, ref remaining, .. } =>
+                        (dest, d.owner_tag.clone(), false, remaining.clone()),
+                    OrderState::Retreating { dest, .. } =>
+                        (dest, d.owner_tag.clone(), true, Vec::new()),
                     _ => continue,
                 };
                 d.order = OrderState::Idle; // 临时置 Idle, 第二阶段再决定
-                arrived.push((id, dest, owner, was_retreat));
+                arrived.push((id, dest, owner, was_retreat, remaining));
             }
         }
         // 第一阶段b: 对每个到达候选判定(此时 d 借用已释放, 可查 world)
-        for (id, dest, owner, was_retreat) in arrived {
+        for (id, dest, owner, was_retreat, remaining) in arrived {
             let dest_has_battle = world.battles.iter().any(|b| b.province == dest);
             // 无正在进行的战斗 → 查目标省有无敌军部队(规则1: 同省异国师立刻开战)
             let has_enemies = world.divisions.values()
@@ -170,7 +172,7 @@ pub fn advance_movement(world: &mut World) {
                 if has_enemies || dest_has_battle {
                     decisions.push(ArrivalDecision::RetreatIntoEnemy { id, dest });
                 } else {
-                    decisions.push(ArrivalDecision::Capture(Arrival { id, dest, owner }));
+                    decisions.push(ArrivalDecision::Capture(Arrival { id, dest, owner, remaining }));
                 }
             } else {
                 // Moving 组到达:
@@ -179,7 +181,7 @@ pub fn advance_movement(world: &mut World) {
                 if dest_has_battle || has_enemies {
                     decisions.push(ArrivalDecision::Pending { id, dest });
                 } else {
-                    decisions.push(ArrivalDecision::Capture(Arrival { id, dest, owner }));
+                    decisions.push(ArrivalDecision::Capture(Arrival { id, dest, owner, remaining }));
                 }
             }
         }
@@ -191,7 +193,23 @@ pub fn advance_movement(world: &mut World) {
             ArrivalDecision::Capture(a) => {
                 if let Some(d) = world.divisions.get_mut(&a.id) {
                     d.location_province = a.dest;
-                    d.order = OrderState::Idle;
+                    d.order = OrderState::Idle; // 临时, 下面续走可能覆盖
+                }
+                // 【决策5】检查路径剩余: remaining 非空 → 续走下一段
+                if !a.remaining.is_empty() {
+                    let next = a.remaining[0];
+                    let new_remaining = a.remaining[1..].to_vec();
+                    if let Some(d) = world.divisions.get_mut(&a.id) {
+                        let hostile = world.provinces.get(&next)
+                            .map(|p| p.controller != a.owner)
+                            .unwrap_or(false);
+                        d.order = OrderState::Moving {
+                            dest: next, progress: 0.0,
+                            hostile, origin: a.dest, // 出发地 = 刚占领的省
+                            remaining: new_remaining,
+                        };
+                        // 续走时不在此开战, 交给下一 tick 的 check_engagements
+                    }
                 }
                 arrivals.push(a);
             }
@@ -451,5 +469,47 @@ mod tests {
             .filter(|bl| bl.attackers.contains(&a) || bl.defenders.contains(&a))
             .count();
         assert_eq!(a_in_battles, 2, "A应同时参与两场战斗");
+    }
+
+    // ===== 多段路径: 占领中途省后续走(决策5)=====
+
+    /// 3 省链 1-2-3, 省2 是敌方空省(待占领), 省3 己方
+    fn chain_1_2_3_world() -> World {
+        let mut w = World::new();
+        w.provinces.insert(1, crate::runtime::Province {
+            id: 1, owner: "GER".into(), controller: "GER".into(),
+            terrain: "plains".into(), neighbors: vec![2],
+        });
+        w.provinces.insert(2, crate::runtime::Province {
+            id: 2, owner: "FRA".into(), controller: "FRA".into(),
+            terrain: "plains".into(), neighbors: vec![1, 3],
+        });
+        w.provinces.insert(3, crate::runtime::Province {
+            id: 3, owner: "GER".into(), controller: "GER".into(),
+            terrain: "plains".into(), neighbors: vec![2],
+        });
+        w
+    }
+
+    #[test]
+    fn t_multihop_continues_after_mid_capture() {
+        // 师从省1 Moving 到省2(remaining=[3]), 占领省2 后应续走到省3
+        let mut w = chain_1_2_3_world();
+        let d = Division {
+            id: 0, owner_tag: "GER".into(), location_province: 1,
+            order: OrderState::Moving {
+                dest: 2, progress: 0.99, hostile: true, origin: 1, remaining: vec![3],
+            },
+            max_org: 60.0, org: 60.0, max_strength: 20.0, strength: 20.0,
+            ..Default::default()
+        };
+        let did = w.add_division(d);
+        // 第 1 tick: 到达省2(progress 满)→ 占领 → 续走设 dest=3
+        advance_movement(&mut w);
+        let div = w.divisions.get(&did).unwrap();
+        assert_eq!(div.location_province, 2, "占领省2 后 location 应更新为 2");
+        assert!(div.is_moving(), "应续走(仍是 Moving)");
+        assert_eq!(div.move_dest(), Some(3), "dest 应切到省3");
+        assert_eq!(div.move_progress(), 0.0, "续走进度归零");
     }
 }
