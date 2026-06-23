@@ -1552,6 +1552,45 @@ fn t_find_path_no_route_ignored() {
 }
 
 #[test]
+fn t_move_during_pending_ignored() {
+    // 决策11: 师在 Pending 时收到移动命令 → 忽略(不能中断待占领的战斗)
+    let mut reg = Registry::new();
+    register_all(&mut reg);
+    let interp = Interpreter::new(reg);
+    let mut world = chain_world_owned();
+    run_setup(&mut world, &interp, r#"
+        _setup = { create_division = { owner = GER location = 2 soft_attack = 10 defense = 10 max_org = 60 } }
+    "#);
+    let did = *world.divisions.keys().next().unwrap();
+    // 手动设为 Pending(战斗未胜, 等占领)
+    world.divisions.get_mut(&did).unwrap().order = hoi4_clone::runtime::entities::OrderState::Pending {
+        dest: 3, remaining: vec![],
+    };
+    // 下令移动到省1 — 应被忽略(Pending 不可被新移动命令中断)
+    run_cmd(&mut world, &interp, &format!("move_division = {{ division = {did} target = 1 }}"));
+    assert!(world.divisions.get(&did).unwrap().is_pending(), "Pending 时命令应忽略");
+}
+
+#[test]
+fn t_move_during_retreating_ignored() {
+    // 决策11: 师在 Retreating 时收到移动命令 → 忽略(不能中断撤退)
+    let mut reg = Registry::new();
+    register_all(&mut reg);
+    let interp = Interpreter::new(reg);
+    let mut world = chain_world_owned();
+    run_setup(&mut world, &interp, r#"
+        _setup = { create_division = { owner = GER location = 2 soft_attack = 10 defense = 10 max_org = 60 } }
+    "#);
+    let did = *world.divisions.keys().next().unwrap();
+    // 手动设为 Retreating
+    world.divisions.get_mut(&did).unwrap().order = hoi4_clone::runtime::entities::OrderState::Retreating {
+        dest: 1, progress: 0.5,
+    };
+    run_cmd(&mut world, &interp, &format!("move_division = {{ division = {did} target = 3 }}"));
+    assert!(world.divisions.get(&did).unwrap().is_withdrawing(), "Retreating 时命令应忽略");
+}
+
+#[test]
 fn support_attack_invalid_when_non_adjacent() {
     // 决策13: 目标省与师 location 不相邻 → 静默无效(不设 Supporting)
     let mut reg = Registry::new();
