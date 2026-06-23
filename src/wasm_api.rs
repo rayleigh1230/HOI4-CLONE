@@ -290,7 +290,7 @@ fn serialize_state(world: &World) -> String {
             s.push(',');
         }
         first = false;
-        // enum 拍平为原 JSON 键(JS 端零改动)
+        // enum 拍平为原 JSON 键(兼容) + 新增 path 字段(多段行军完整路径, 供 UI 画全程箭头)
         use crate::runtime::entities::OrderState;
         let (dest, pending, progress, supporting, attacking, retreating) = match &d.order {
             OrderState::Idle => (0u32, 0u32, 0.0, 0u32, false, false),
@@ -299,13 +299,29 @@ fn serialize_state(world: &World) -> String {
             OrderState::Pending { dest, .. } => (0, *dest, 0.0, 0, false, false),
             OrderState::Supporting { target } => (0, 0, 0.0, *target, false, false),
         };
+        // path: 完整行军路径(含出发地), Moving=[origin,dest,...remaining], Pending=[loc,dest,...remaining]
+        // UI 用它画全程箭头(逐段收), 起止省份决定箭头弧度方向(区分往返重合)
+        let path: Vec<u32> = match &d.order {
+            OrderState::Moving { dest, origin, ref remaining, .. } => {
+                let mut v = vec![*origin, *dest];
+                v.extend_from_slice(remaining);
+                v
+            }
+            OrderState::Pending { dest, ref remaining } => {
+                let mut v = vec![d.location_province, *dest];
+                v.extend_from_slice(remaining);
+                v
+            }
+            _ => Vec::new(),
+        };
+        let path_str: String = path.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(",");
         s.push_str(&format!(
-            "{{\"id\":{},\"owner\":\"{}\",\"org\":{:.1},\"max_org\":{:.0},\"str\":{:.1},\"max_str\":{:.0},\"eq_ratio\":{:.2},\"mp_ratio\":{:.2},\"loc\":{},\"dest\":{},\"pending\":{},\"progress\":{:.3},\"supporting\":{},\"attacking\":{},\"retreating\":{},\"annihilated\":{}}}",
+            "{{\"id\":{},\"owner\":\"{}\",\"org\":{:.1},\"max_org\":{:.0},\"str\":{:.1},\"max_str\":{:.0},\"eq_ratio\":{:.2},\"mp_ratio\":{:.2},\"loc\":{},\"dest\":{},\"pending\":{},\"progress\":{:.3},\"supporting\":{},\"attacking\":{},\"retreating\":{},\"annihilated\":{},\"path\":[{}]}}",
             d.id, d.owner_tag, d.org, d.max_org, d.strength, d.max_strength,
             d.equipment_ratio_only(), d.manpower_ratio(),
             d.location_province,
             dest, pending, progress, supporting,
-            attacking, retreating, d.is_annihilated()
+            attacking, retreating, d.is_annihilated(), path_str
         ));
     }
     s.push_str("],\"battles\":[");

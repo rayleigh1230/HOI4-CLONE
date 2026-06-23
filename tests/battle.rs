@@ -1649,3 +1649,36 @@ fn t_queue_move_appends_waypoint() {
     assert_eq!(div.location_province, 4, "应到达追加的航点省4");
     assert!(div.is_idle());
 }
+
+#[test]
+fn t_queue_move_then_queue_roundtrip_keeps_full_path() {
+    // 回归: move 1→5 后 queue 5→3, 路径应是 [1,2,3,4,5,4,3](去回全程, 不丢前段)
+    let mut reg = Registry::new();
+    register_all(&mut reg);
+    let interp = Interpreter::new(reg);
+    let mut world = chain_world_owned();
+    world.provinces.insert(4, hoi4_clone::runtime::Province {
+        id: 4, owner: "GER".into(), controller: "GER".into(),
+        terrain: "plains".into(), neighbors: vec![3, 5],
+    });
+    world.provinces.insert(5, hoi4_clone::runtime::Province {
+        id: 5, owner: "GER".into(), controller: "GER".into(),
+        terrain: "plains".into(), neighbors: vec![4],
+    });
+    world.provinces.get_mut(&3).unwrap().neighbors.push(4);
+    run_setup(&mut world, &interp, r#"
+        _setup = { create_division = { owner = GER location = 1 soft_attack = 10 defense = 10 max_org = 60 } }
+    "#);
+    let did = *world.divisions.keys().next().unwrap();
+    run_cmd(&mut world, &interp, &format!("move_division = {{ division = {did} target = 5 }}"));
+    run_cmd(&mut world, &interp, &format!("queue_move = {{ division = {did} target = 3 }}"));
+    // 期望: dest=2(第一站), remaining=[3,4,5,4,3](后续, 含去回)
+    let div = world.divisions.get(&did).unwrap();
+    assert_eq!(div.move_dest(), Some(2), "第一站应仍是省2");
+    use hoi4_clone::runtime::entities::OrderState;
+    if let OrderState::Moving { remaining, .. } = &div.order {
+        assert_eq!(remaining, &vec![3, 4, 5, 4, 3], "全程路径应含去(3,4,5)和回(4,3), 不丢前段");
+    } else {
+        panic!("应是 Moving");
+    }
+}

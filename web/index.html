@@ -28,7 +28,7 @@
   .prov-header h3 { color: #e94560; font-size: 14px; }
   .prov-tag { font-size: 11px; padding: 2px 8px; border-radius: 3px; }
   .prov-empty { color: #555; font-size: 12px; text-align: center; padding: 20px; }
-  #mapCanvas { width: 100%; height: 280px; background: #0a0a1a; border: 1px solid #0f3460; border-radius: 4px; cursor: pointer; margin-bottom: 10px; }
+  #mapCanvas { width: 100%; height: 360px; background: #0a0a1a; border: 1px solid #0f3460; border-radius: 4px; cursor: pointer; margin-bottom: 10px; }
   .map-hint { font-size: 11px; color: #888; margin-bottom: 8px; }
   .combat-window { background: #0a0a1a; border: 1px solid #0f3460; border-radius: 4px; padding: 10px; margin-bottom: 10px; font-size: 12px; }
   .combat-title { color: #e94560; font-weight: bold; margin-bottom: 6px; }
@@ -120,9 +120,16 @@
       <button class="secondary" onclick="supply('FRA')">补给FRA</button>
     </div>
     <details><summary class="map-hint">高级: 自定义脚本</summary>
-    <textarea id="script">create_province = { id = 1 owner = FRA neighbors = { 2 3 } }
-create_province = { id = 2 owner = GER neighbors = { 1 } }
-create_province = { id = 3 owner = FRA neighbors = { 1 } }</textarea>
+    <textarea id="script">create_province = { id = 1 owner = GER neighbors = { 2 6 7 } }
+create_province = { id = 2 owner = GER neighbors = { 1 3 6 7 8 } }
+create_province = { id = 3 owner = GER neighbors = { 2 4 7 8 9 } }
+create_province = { id = 4 owner = GER neighbors = { 3 5 8 9 10 } }
+create_province = { id = 5 owner = GER neighbors = { 4 9 10 } }
+create_province = { id = 6 owner = FRA neighbors = { 1 2 7 } }
+create_province = { id = 7 owner = FRA neighbors = { 1 2 3 6 8 } }
+create_province = { id = 8 owner = FRA neighbors = { 2 3 4 7 9 } }
+create_province = { id = 9 owner = FRA neighbors = { 3 4 5 8 10 } }
+create_province = { id = 10 owner = FRA neighbors = { 4 5 9 } }</textarea>
     <button class="secondary" onclick="loadScript()">运行脚本</button>
     </details>
     <div class="controls">
@@ -138,7 +145,7 @@ create_province = { id = 3 owner = FRA neighbors = { 1 } }</textarea>
   <div class="panel">
     <h2>🗺️ 战场</h2>
     <canvas id="mapCanvas"></canvas>
-    <div class="map-hint">💡 点师选中 → 点目标省选命令(进军⚔️/支援🎯) | 点地块查看部队 | 双击地块切换控制权</div>
+    <div class="map-hint">💡 10省两军对垒(上排1-5 GER / 下排6-10 FRA, 上下对应省为前线对峙)。点师选中 → 点目标省选命令(进军⚔️/支援🎯/追加航点➕) | 双击地块切换控制权。点远处省会自动多段行军</div>
     <div class="battle-info" id="battleInfo"></div>
     <div class="prov-header" id="provHeader"></div>
     <div class="divisions" id="divisions"></div>
@@ -148,6 +155,7 @@ create_province = { id = 3 owner = FRA neighbors = { 1 } }</textarea>
 <!-- 下令菜单(选中师后点省弹出) -->
 <div id="orderMenu">
   <button data-order="attack">⚔️ 进军攻击</button>
+  <button data-order="waypoint">➕ 追加航点</button>
   <button data-order="support">🎯 支援攻击</button>
   <button data-order="cancel" class="cancel">✖️ 取消</button>
 </div>
@@ -335,11 +343,17 @@ function refresh() {
   // 同步部署面板: 归属+地块跟随选中地块
   if (prov) {
     const depOwner = document.getElementById('depOwner');
-    const depProv = document.getElementById('depProv');
     if (depOwner && (prov.controller === 'GER' || prov.controller === 'FRA')) {
       depOwner.value = prov.controller;
     }
-    if (depProv) depProv.value = String(selectedProvince);
+  }
+  // 地块下拉动态填充: 跟随实际省份(不再硬编码 1/2/3)
+  const depProv = document.getElementById('depProv');
+  if (depProv) {
+    const allProvIds = state.provinces.map(p => p.id).sort((a, b) => a - b);
+    const cur = selectedProvince !== null ? selectedProvince : (parseInt(depProv.value, 10) || allProvIds[0]);
+    depProv.innerHTML = allProvIds.map(id => `<option value="${id}">${id}</option>`).join('');
+    if (allProvIds.includes(cur)) depProv.value = String(cur);
   }
   const provDivs = state.divisions.filter(d => d.loc === selectedProvince);
   const ctrlColor = TAG_COLORS[prov?.controller] || '#666';
@@ -424,15 +438,25 @@ let selectedDivId = null; // 选中师(再点目标省移动)
 let selectedProvince = null; // 选中地块(点Canvas地块选中, 显示该地块部队)
 
 function provincePos(id, allIds, w, h) {
-  // 省份环形排布; 省1居中(战场)
-  if (id === 1) return { x: w / 2, y: h / 2 };
-  const idx = allIds.indexOf(id);
-  const others = allIds.filter(x => x !== 1);
-  const oi = others.indexOf(id);
-  const n = others.length;
-  const r = Math.min(w, h) * 0.35;
-  const angle = (oi / Math.max(n, 1)) * Math.PI * 2 - Math.PI / 2;
-  return { x: w / 2 + Math.cos(angle) * r, y: h / 2 + Math.sin(angle) * r };
+  // 两军对垒布局: 省份分上下两排。
+  // 上半 id(1-5) 在上排, 下半 id(6-10) 在下排; 每排内按 id 水平排列。
+  // id N 的下排对应省 = N + (n/2)(如 省1 上 ↔ 省6 下, 正面对峙)。
+  // 两排 y 相距大, 中间是前线, 表现两军对垒。
+  const sorted = [...allIds].sort((a, b) => a - b);
+  const half = Math.ceil(sorted.length / 2); // 上排数量
+  // 上排: id 较小的前 half 个; 下排: 其余
+  const topIds = sorted.slice(0, half);
+  const botIds = sorted.slice(half);
+  const row = topIds.includes(id) ? 'top' : 'bottom';
+  const rowIds = row === 'top' ? topIds : botIds;
+  const colIdx = rowIds.indexOf(id);
+  const colN = rowIds.length;
+  const margin = 40;
+  const usable = w - margin * 2;
+  const x = colN <= 1 ? w / 2 : margin + (usable * colIdx / (colN - 1));
+  // y: 上排在画布上 1/4 处, 下排在下 1/4 处, 中间留前线空隙
+  const y = row === 'top' ? h * 0.27 : h * 0.73;
+  return { x, y };
 }
 
 function drawMap() {
@@ -491,59 +515,107 @@ function drawMap() {
     const bx = pos[d.loc] ? pos[d.loc].x : 0;
     const by = pos[d.loc] ? pos[d.loc].y : 0;
     if (!pos[d.loc]) return;
-    // 行军箭头: 按 move_progress 比例填充(从出发地到当前位置), 箭头头在进度位置
-    // 颜色: 进攻红 / 普通绿 / 撤退灰
-    const drawProgressArrow = (targetProv, progress, color, dashed) => {
-      if (!pos[targetProv]) return;
-      const tx = pos[targetProv].x, ty = pos[targetProv].y;
-      const p = Math.max(0, Math.min(1, progress)); // 钳到 0-1
-      const cx = bx + (tx - bx) * p; // 当前进度的位置
-      const cy = by + (ty - by) * p;
-      const ang = Math.atan2(ty - by, tx - bx);
-      ctx.strokeStyle = color;
-      ctx.lineWidth = 3;
-      ctx.setLineDash(dashed ? [4, 3] : []);
-      // 已填充段(出发地 → 当前进度)
-      ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(cx, cy); ctx.stroke();
-      // 未填充段(淡色虚线, 表示剩余路程)
-      ctx.strokeStyle = color + '44';
-      ctx.lineWidth = 1.5;
-      ctx.setLineDash([2, 3]);
-      ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(tx, ty); ctx.stroke();
-      ctx.setLineDash([]);
-      // 箭头头(在进度位置, 已开始行军才画)
-      if (p > 0.02) {
-        ctx.fillStyle = color;
+
+    // ===== 多段行军箭头系统(军事地图风格: 一条完整折线箭头) =====
+    // 设计:
+    //  1. d.path = 完整路径 [orig, dest, ...remaining]。画一条连续折线, 箭头头固定在最终目的地(只有一个头)。
+    //  2. 进度推进时尾端缩短: 师走到省2后 path 变 [2,...], 旧段不再属于路径, 尾从2开始, 头不动。
+    //  3. 平行车道偏移(仅重合边): 同一条无向边(min-max)被路径多次经过才偏移, 单次经过的边走原线。
+    //     → 单程移动: 全程不偏, 箭头头/尾钉在省份中心。
+    //     → 往返(1→5→3, 3-4/4-5 各走2次): 这两段按行进方向左法线偏移 LANE, 去回自动分到中轴两侧。
+    //  4. 颜色: 进攻红 / 移动绿 / 撤退灰。
+
+    const arrowColor = d.retreating ? '#888888' : (d.attacking ? '#e94560' : '#4cd964');
+    const pathArr = Array.isArray(d.path) ? d.path : [];
+    const LANE = 14; // 重合边车道偏移(px)
+
+    if (pathArr.length >= 2) {
+      const pts = pathArr.map(p => pos[p]);
+      if (pts.every(Boolean) && pts.length >= 2) {
+        // 统计每条无向边被经过次数(用 "min-max" 作 key)
+        const undirectedKey = (a, b) => a < b ? `${a}-${b}` : `${b}-${a}`;
+        const edgeCount = {};
+        for (let i = 0; i < pathArr.length - 1; i++) {
+          const k = undirectedKey(pathArr[i], pathArr[i + 1]);
+          edgeCount[k] = (edgeCount[k] || 0) + 1;
+        }
+        // 左法线(行进方向左侧)
+        const segNormal = (a, b) => {
+          const dx = b.x - a.x, dy = b.y - a.y;
+          const len = Math.hypot(dx, dy) || 1;
+          return { nx: dy / len, ny: -dx / len };
+        };
+        // 每条边的偏移: 仅当该无向边被经过 >=2 次才偏 LANE(单次=0)
+        // 偏移方向 = 行进方向左法线(去回方向相反 → 法线相反 → 自动分两侧)
+        const segOffsetVec = (i) => {
+          const k = undirectedKey(pathArr[i], pathArr[i + 1]);
+          if ((edgeCount[k] || 0) < 2) return { ox: 0, oy: 0 }; // 单次经过, 不偏
+          const n = segNormal(pts[i], pts[i + 1]);
+          return { ox: n.nx * LANE, oy: n.ny * LANE };
+        };
+        // 每个顶点偏移 = 前后段偏移向量平均(端点用单边)
+        const lanePts = pts.map((p, i) => {
+          let ox, oy;
+          if (i === 0) {
+            ({ ox, oy } = segOffsetVec(0));
+          } else if (i === pts.length - 1) {
+            ({ ox, oy } = segOffsetVec(i - 1));
+          } else {
+            const o1 = segOffsetVec(i - 1), o2 = segOffsetVec(i);
+            ox = (o1.ox + o2.ox) / 2; oy = (o1.oy + o2.oy) / 2;
+          }
+          return { x: p.x + ox, y: p.y + oy };
+        });
+
+        // 当前尾端: 第0段按 progress 插值
+        const prog = Math.max(0, Math.min(1, d.progress || 0));
+        const tailX = lanePts[0].x + (lanePts[1].x - lanePts[0].x) * prog;
+        const tailY = lanePts[0].y + (lanePts[1].y - lanePts[0].y) * prog;
+
+        // 画车道折线: 纯 lineTo + 浏览器原生 lineJoin='round'。
+        // 之前手动圆弧/贝塞尔/arcTo 全部失败(参数易错导致整个 stroke 崩溃, 箭头消失)。
+        // lineJoin='round' 圆角半径 = lineWidth/2, 对任意角度都正确不崩溃。
+        // 加粗线宽让圆角肉眼可见(线宽10 → 圆角5px)。
+        ctx.strokeStyle = arrowColor;
+        ctx.lineWidth = 10;
+        ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+        ctx.setLineDash([]);
         ctx.beginPath();
-        ctx.moveTo(cx, cy);
-        ctx.lineTo(cx - 9 * Math.cos(ang - 0.4), cy - 9 * Math.sin(ang - 0.4));
-        ctx.lineTo(cx - 9 * Math.cos(ang + 0.4), cy - 9 * Math.sin(ang + 0.4));
+        ctx.moveTo(tailX, tailY);
+        for (let i = 1; i < lanePts.length; i++) {
+          ctx.lineTo(lanePts[i].x, lanePts[i].y);
+        }
+        ctx.stroke();
+        ctx.lineCap = 'butt'; ctx.lineJoin = 'miter';
+
+        // 唯一的箭头头: 在最终目的地(已含偏移), 方向 = 最后段方向
+        const lastFrom = lanePts[lanePts.length - 2];
+        const lastTo = lanePts[lanePts.length - 1];
+        const ang = Math.atan2(lastTo.y - lastFrom.y, lastTo.x - lastFrom.x);
+        const head = 20;
+        ctx.fillStyle = arrowColor;
+        ctx.beginPath();
+        ctx.moveTo(lastTo.x, lastTo.y);
+        ctx.lineTo(lastTo.x - head * Math.cos(ang - 0.4), lastTo.y - head * Math.sin(ang - 0.4));
+        ctx.lineTo(lastTo.x - head * 0.5 * Math.cos(ang), lastTo.y - head * 0.5 * Math.sin(ang));
+        ctx.lineTo(lastTo.x - head * Math.cos(ang + 0.4), lastTo.y - head * Math.sin(ang + 0.4));
         ctx.closePath(); ctx.fill();
       }
-    };
-    // 行军中(destination 有值): 按进度填充
-    if (d.dest && pos[d.dest]) {
-      const color = d.retreating ? '#888888' : (d.attacking ? '#e94560' : '#4cd964');
-      drawProgressArrow(d.dest, d.progress || 0, color, false);
-    }
-    // pending_arrival: 进度满等战斗胜 → 实线满箭头(虚线表示待占领)
-    if (d.pending && pos[d.pending]) {
-      drawProgressArrow(d.pending, 1.0, '#e94560', true);
-    }
-    // 支援攻击: 蓝色虚线箭头(师不移动, 无进度填充)
-    if (d.supporting && pos[d.supporting]) {
+    } else if (d.supporting && pos[d.supporting]) {
+      // 支援攻击: 蓝色虚线箭头(师不移动, 无 path, 单段)
       const tx = pos[d.supporting].x, ty = pos[d.supporting].y;
       ctx.strokeStyle = '#3a86ff';
-      ctx.lineWidth = 2; ctx.setLineDash([6, 3]);
+      ctx.lineWidth = 3; ctx.setLineDash([6, 3]);
       ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(tx, ty); ctx.stroke();
       ctx.setLineDash([]);
-      // 箭头头(目标端)
       const ang = Math.atan2(ty - by, tx - bx);
+      const head = 14;
       ctx.fillStyle = '#3a86ff';
       ctx.beginPath();
       ctx.moveTo(tx, ty);
-      ctx.lineTo(tx - 8 * Math.cos(ang - 0.4), ty - 8 * Math.sin(ang - 0.4));
-      ctx.lineTo(tx - 8 * Math.cos(ang + 0.4), ty - 8 * Math.sin(ang + 0.4));
+      ctx.lineTo(tx - head * Math.cos(ang - 0.4), ty - head * Math.sin(ang - 0.4));
+      ctx.lineTo(tx - head * 0.5 * Math.cos(ang), ty - head * 0.5 * Math.sin(ang));
+      ctx.lineTo(tx - head * Math.cos(ang + 0.4), ty - head * Math.sin(ang + 0.4));
       ctx.closePath(); ctx.fill();
     }
     const color = TAG_COLORS[d.owner] || '#fff';
@@ -563,7 +635,7 @@ const orderMenu = document.getElementById('orderMenu');
 function showOrderMenu(divId, targetProv, x, y) {
   pendingOrder = { divId, targetProv };
   // 定位菜单(相对 viewport, 避免超出右边/下边)
-  const menuW = 140, menuH = 140;
+  const menuW = 140, menuH = 184;
   const vx = Math.min(x, window.innerWidth - menuW - 8);
   const vy = Math.min(y, window.innerHeight - menuH - 8);
   orderMenu.style.left = vx + 'px';
@@ -587,7 +659,10 @@ orderMenu.addEventListener('click', (e) => {
   try {
     if (order === 'attack') {
       wasm.exports.engine_move_division(divId, targetProv);
-      log(`师#${divId} 进军→省${targetProv}`);
+      log(`师#${divId} 进军→省${targetProv}(自动寻路, 多段行军)`);
+    } else if (order === 'waypoint') {
+      wasm.exports.engine_queue_move(divId, targetProv);
+      log(`师#${divId} 追加航点→省${targetProv}`);
     } else if (order === 'support') {
       wasm.exports.engine_support_attack(divId, targetProv);
       log(`师#${divId} 支援→省${targetProv}`);
