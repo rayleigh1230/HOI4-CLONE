@@ -46,6 +46,7 @@
 | 10 | 边界 A(行军中再下令) | `move_division`:覆盖(重新从当前省寻路);`queue_move`:追加到末尾 |
 | 11 | 边界 B(战斗中下令) | Pending/Retreating 时新移动命令被忽略(不能中断战斗/撤退) |
 | 12 | 边界 C(同省命令) | 起点终点同省 → 忽略(无意义命令) |
+| 13 | 支援攻击收敛 | `support_attack` 的 target 必须与师 `location_province` **相邻**;不相邻 → 静默无效(与"无战斗"处理一致) |
 
 ---
 
@@ -229,13 +230,32 @@ queue_move(div, target):
           - remaining.extend(seg)
        b. 当前 Idle/Supporting:
           - 等同 move_division(从头寻路 cur_loc → target)
-          - 若 Idle:设 Moving;若 Supporting:先停支援再 Moving(或忽略?见 4.3)
+          - 若 Idle:设 Moving;若 Supporting:先停支援再 Moving(或忽略?见 4.4)
      5. 若 seg == None → 忽略(追加失败,保持原状)
 ```
 
 > 注:queue_move 追加时,`end_prov`(当前路径末尾)可能是 dest(remaining 空)或 remaining.last()。若 end_prov == target(追加的就是当前末尾),find_path 返回 None → 忽略(无意义追加)。
 
-### 4.3 queue_move 对 Supporting 状态的处理(待定,倾向)
+### 4.3 support_attack 收敛(新增邻接检查)
+
+现有 support_attack 已有"目标省无战斗 → 静默无效"判定。**新增**:目标省与师 `location_province` 不相邻 → 同样静默无效。
+
+理由:
+- HOI4 原版支援攻击就是"从相邻省发起的远程参战",不是跨地图开火
+- 多段行军引入"远距离"概念后,若不限邻接,师能隔着整个地图支援,破坏空间逻辑
+- 处理方式与现有"无战斗无效"完全一致(静默,不报错,不设 Supporting),保持代码风格统一
+
+```
+support_attack(div, target):
+    1. 读 cur_loc
+    2.【新增】adjacent = provinces[cur_loc].neighbors.contains(target)
+       if !adjacent → 静默无效(不设 Supporting,蓝箭头不出现), return
+    3.【不变】has_battle = battles 里 target 省有战斗
+       if !has_battle → 静默无效, return
+    4.【不变】设 Supporting{target} + join_as_attacker
+```
+
+### 4.4 queue_move 对 Supporting 状态的处理(待定,倾向)
 
 师正在支援攻击(Supporting)时收到 queue_move:
 - **倾向**:忽略(支援是主动战斗行为,不应被移动命令打断;玩家应先 stop_order 再 queue_move)
@@ -243,7 +263,7 @@ queue_move(div, target):
 
 → 实现时按"Supporting 时忽略 queue_move"处理,文档记录。
 
-### 4.4 WASM API 新增
+### 4.5 WASM API 新增
 
 `src/wasm_api.rs` 加:
 ```rust
@@ -385,6 +405,8 @@ engine_queue_move(divId, targetProvince)
 | `t_move_during_pending_ignored` | 边界 B:Pending 时命令忽略 |
 | `t_move_during_retreating_ignored` | 边界 B:Retreating 时命令忽略 |
 | `t_find_path_no_route_ignored` | 寻路失败 → 师不动 |
+| `t_support_attack_non_adjacent_ignored` | 决策13:支援攻击 target 不相邻 → 静默无效(不设 Supporting) |
+| `t_support_attack_adjacent_works` | 相邻 + 有战斗 → 正常支援(回归,确保邻接检查不误伤合法支援) |
 
 ---
 
@@ -395,7 +417,7 @@ engine_queue_move(divId, targetProvince)
 | `src/runtime/entities.rs` | `OrderState::Moving` 加 `remaining: Vec<u32>` 字段 |
 | `src/combat/pathfinding.rs` | **新文件**:`find_path` + `is_passable` + `edge_weight` |
 | `src/combat/mod.rs` | 声明 `pub mod pathfinding;` |
-| `src/combat/commands.rs` | `move_division` 加寻路;新增 `queue_move` 命令注册 |
+| `src/combat/commands.rs` | `move_division` 加寻路;新增 `queue_move` 命令注册;`support_attack` 加邻接检查(决策13) |
 | `src/combat/movement.rs` | `advance_movement` 到达后续走逻辑;`Arrival` 加 remaining;辅助函数 `continue_path_if_any` |
 | `src/wasm_api.rs` | 新增 `engine_queue_move` FFI |
 | `tests/battle.rs`(或新文件) | 补 `remaining: vec![]` 到现有 Moving 构造;加多段测试 |
