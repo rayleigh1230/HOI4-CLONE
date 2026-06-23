@@ -88,6 +88,28 @@ pub fn cancel_finished_supports(world: &mut World) {
 
 /// 推进所有正在移动的师(每小时调用)
 pub fn advance_movement(world: &mut World) {
+    // 【决策14机制1】第 0 步: 检查每个 Moving 师的 dest 是否仍可进入。
+    // 不可进入(如对方领土投降后) → 师停止(转 Idle, 清 remaining)。
+    // 只查 dest(当前正在去的省), 不扫整条 remaining(后面的省等走到再查)。
+    let moving_for_check: Vec<u64> = world.divisions.iter()
+        .filter_map(|(id, d)| d.is_moving().then_some(*id))
+        .collect();
+    for id in moving_for_check {
+        let blocked = match world.divisions.get(&id) {
+            Some(d) => match d.order {
+                OrderState::Moving { dest, .. } =>
+                    !crate::combat::pathfinding::is_passable(world, dest),
+                _ => false,
+            },
+            None => false,
+        };
+        if blocked {
+            if let Some(d) = world.divisions.get_mut(&id) {
+                d.order = OrderState::Idle; // 清 remaining(Moving→Idle)
+            }
+        }
+    }
+
     // 收集所有 Moving/Retreating 的师(需要推进进度)
     let moving_ids: Vec<u64> = world
         .divisions
@@ -310,6 +332,31 @@ pub fn advance_movement(world: &mut World) {
                     dest: next, progress: 0.0, hostile: next_hostile,
                     origin: dest, remaining: new_remaining,
                 };
+            }
+        }
+    }
+}
+
+/// 强制中止所有路径涉及不可进入省的师(转 Idle, 清 remaining)。
+/// 供未来投降/停战/领土移交事件批量调用 —— 原版"强制中止敌对行为"的等价。
+/// 与 advance_movement 第 0 步的区别: 本函数扫整条路径(dest+remaining), 事件触发时一次性清场。
+pub fn invalidate_paths_to_inaccessible(world: &mut World) {
+    let moving_ids: Vec<u64> = world.divisions.iter()
+        .filter_map(|(id, d)| d.is_moving().then_some(*id))
+        .collect();
+    for id in moving_ids {
+        let blocked = match world.divisions.get(&id) {
+            Some(d) => match &d.order {
+                OrderState::Moving { dest, remaining, .. } =>
+                    !crate::combat::pathfinding::is_passable(world, *dest)
+                    || remaining.iter().any(|&p| !crate::combat::pathfinding::is_passable(world, p)),
+                _ => false,
+            },
+            None => false,
+        };
+        if blocked {
+            if let Some(d) = world.divisions.get_mut(&id) {
+                d.order = OrderState::Idle;
             }
         }
     }

@@ -61,8 +61,35 @@ pub fn find_path(world: &World, from: u32, to: u32) -> Option<Vec<u32>> {
 /// - "未开战不得入境": 检查 prov.controller 是否己方或已与该 owner 开战
 /// - "绕开驻军省": 检查 prov 有无敌方非撤退师
 /// 改这个函数即可, find_path 主体不动。
-fn is_passable(_world: &World, _prov: u32) -> bool {
+///
+/// 决策14 路径失效应对依赖此函数: 当某省变不可进入(如投降后), 调用方(movement.rs)
+/// 据此停止师的行军。测试用 set_test_blocked 模拟省份不可进入。
+pub fn is_passable(world: &World, prov: u32) -> bool {
+    #[cfg(test)]
+    {
+        let blocked_now = TEST_BLOCKED.with(|b| b.borrow().as_ref().map(|set| set.contains(&prov)));
+        if let Some(true) = blocked_now {
+            return false;
+        }
+    }
+    let _ = (world, prov);
     true
+}
+
+#[cfg(test)]
+thread_local! {
+    /// 测试用: 设为 Some(HashSet) 时, 集合中的省视为不可进入(模拟投降/停战)。
+    static TEST_BLOCKED: std::cell::RefCell<Option<std::collections::HashSet<u32>>> =
+        std::cell::RefCell::new(None);
+}
+
+#[cfg(test)]
+pub fn set_test_blocked(provs: &[u32]) {
+    TEST_BLOCKED.with(|b| *b.borrow_mut() = Some(provs.iter().copied().collect()));
+}
+#[cfg(test)]
+pub fn clear_test_blocked() {
+    TEST_BLOCKED.with(|b| *b.borrow_mut() = None);
 }
 
 #[cfg(test)]
@@ -114,5 +141,49 @@ mod tests {
         // 省不在地图里 → None
         assert_eq!(find_path(&w, 1, 99), None, "终点不在地图应返回 None");
         assert_eq!(find_path(&w, 99, 1), None, "起点不在地图应返回 None");
+    }
+
+    // ===== 决策14: 路径中途失效应对 =====
+
+    #[test]
+    fn t_path_stops_when_dest_inaccessible() {
+        // 机制1: 多段行军途中, dest 突然不可进入 → 师转 Idle, remaining 清空
+        use crate::combat::movement::advance_movement;
+        use crate::runtime::entities::{Division, OrderState};
+        let mut w = chain_world(); // 1-2-3-4
+        let d = Division {
+            id: 0, owner_tag: "GER".into(), location_province: 1,
+            order: OrderState::Moving {
+                dest: 2, progress: 0.5, hostile: false, origin: 1, remaining: vec![3],
+            },
+            ..Default::default()
+        };
+        let did = w.add_division(d);
+        // 设置省2 不可进入(模拟投降/停战)
+        super::set_test_blocked(&[2]);
+        advance_movement(&mut w);
+        super::clear_test_blocked();
+        let div = w.divisions.get(&did).unwrap();
+        assert!(div.is_idle(), "dest 不可进入应停止, order={:?}", div.order);
+        assert_eq!(div.move_dest(), None, "应无 dest(转 Idle)");
+    }
+
+    #[test]
+    fn t_invalidate_paths_clears_blocked() {
+        // 机制2: invalidate 扫描 dest+remaining, 任一不可进入则整条路径停止
+        let mut w = chain_world();
+        let d = crate::runtime::entities::Division {
+            id: 0, owner_tag: "GER".into(), location_province: 1,
+            order: crate::runtime::entities::OrderState::Moving {
+                dest: 2, progress: 0.3, hostile: false, origin: 1, remaining: vec![3, 4],
+            },
+            ..Default::default()
+        };
+        let did = w.add_division(d);
+        // 省4 不可进入(remaining 里的中转省)
+        super::set_test_blocked(&[4]);
+        crate::combat::movement::invalidate_paths_to_inaccessible(&mut w);
+        super::clear_test_blocked();
+        assert!(w.divisions.get(&did).unwrap().is_idle(), "remaining 含不可进入省应整条停止");
     }
 }
