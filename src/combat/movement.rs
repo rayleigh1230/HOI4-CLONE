@@ -29,7 +29,7 @@ pub fn check_engagements(world: &mut World) {
         .filter_map(|(id, d)| {
             let dest = match d.order {
                 OrderState::Moving { dest, .. } => dest,
-                OrderState::Pending { dest } => dest,
+                OrderState::Pending { dest, .. } => dest,
                 _ => return None, // Retreating/Idle/Supporting 不主动开战
             };
             Some((*id, dest, d.owner_tag.clone()))
@@ -102,8 +102,8 @@ pub fn advance_movement(world: &mut World) {
     enum ArrivalDecision {
         // 到达非己方空省 → 直接占领
         Capture(Arrival),
-        // Moving 组: 进入 Pending 等战斗(目标省有战斗/敌军), location 不改
-        Pending { id: u64, dest: u32 },
+        // Moving 组: 进入 Pending 等战斗(目标省有战斗/敌军), remaining 保留供战斗胜后续走
+        Pending { id: u64, dest: u32, remaining: Vec<u32> },
         // Retreating 组到达敌方有敌军省: 强制归属(location=dest) + 进入战场
         RetreatIntoEnemy { id: u64, dest: u32 },
     }
@@ -179,7 +179,7 @@ pub fn advance_movement(world: &mut World) {
                 //   - 有战斗/敌军 → Pending(location 不改, 规则3)
                 //   - 无战斗 + 无敌军 → Capture(占领)
                 if dest_has_battle || has_enemies {
-                    decisions.push(ArrivalDecision::Pending { id, dest });
+                    decisions.push(ArrivalDecision::Pending { id, dest, remaining });
                 } else {
                     decisions.push(ArrivalDecision::Capture(Arrival { id, dest, owner, remaining }));
                 }
@@ -213,12 +213,12 @@ pub fn advance_movement(world: &mut World) {
                 }
                 arrivals.push(a);
             }
-            ArrivalDecision::Pending { id, dest } => {
+            ArrivalDecision::Pending { id, dest, remaining } => {
                 if let Some(d) = world.divisions.get_mut(&id) {
                     // 规则3: Pending 时 location 不变(师在战场, 归属地保持上一个占领省)。
                     // 师向 dest 有进度箭头(UI), 但归属地仍是出发地。
-                    // 战斗胜后由第四阶段改 location; 战败则从当前归属地撤退。
-                    d.order = OrderState::Pending { dest };
+                    // remaining 保留, 战斗胜后第四阶段结算时续走。
+                    d.order = OrderState::Pending { dest, remaining };
                 }
             }
             ArrivalDecision::RetreatIntoEnemy { id, dest } => {
@@ -226,7 +226,7 @@ pub fn advance_movement(world: &mut World) {
                 // (撤退组的独立规则: 即便没占领, 归属地也带过来, 当攻方开战)
                 if let Some(d) = world.divisions.get_mut(&id) {
                     d.location_province = dest;
-                    d.order = OrderState::Pending { dest };
+                    d.order = OrderState::Pending { dest, remaining: vec![] };
                 }
                 // 开战由下一 tick 的 check_engagements 处理(师已是 Pending, location=dest)
             }
@@ -255,11 +255,12 @@ pub fn advance_movement(world: &mut World) {
         .filter_map(|(id, d)| d.is_pending().then_some(*id))
         .collect();
     for id in pending {
-        // 快照决策所需只读信息(dest, owner), 避免与后续 get_mut 借用冲突
-        let (dest, owner) = match world.divisions.get(&id) {
-            Some(d) => match d.pending_dest() {
-                Some(p) => (p, d.owner_tag.clone()),
-                None => continue,
+        // 快照决策所需只读信息(dest, owner, remaining), 避免与后续 get_mut 借用冲突
+        let (dest, owner, remaining_left) = match world.divisions.get(&id) {
+            Some(d) => match d.order {
+                OrderState::Pending { dest, ref remaining } =>
+                    (dest, d.owner_tag.clone(), remaining.clone()),
+                _ => continue,
             },
             None => continue,
         };
@@ -275,6 +276,15 @@ pub fn advance_movement(world: &mut World) {
             continue; // 有敌军但战斗未开(等 check_engagements 下tick开战), 不占领
         }
         // 无战斗 + 无敌军 → 到达结算(敌人全撤/歼灭, 攻方占领)
+        // 先算 next 段的 hostile(需借用 owner, 在下面 owner 被 move 之前)
+        let next_hostile = if !remaining_left.is_empty() {
+            let next = remaining_left[0];
+            world.provinces.get(&next)
+                .map(|p| p.controller != owner)
+                .unwrap_or(false)
+        } else {
+            false
+        };
         let is_own = world.provinces.get(&dest)
             .map(|p| p.controller == owner)
             .unwrap_or(false);
@@ -285,10 +295,21 @@ pub fn advance_movement(world: &mut World) {
         if !is_own {
             if let Some(p) = world.provinces.get_mut(&dest) {
                 p.controller = owner.clone();
-                p.owner = owner;
+                p.owner = owner; // owner move 在此
             }
             if let Some(d) = world.divisions.get_mut(&id) {
                 d.org = (d.org - d.max_org * ORG_LOSS_ON_CONQUER).max(0.0);
+            }
+        }
+        // 【决策5】Pending 结算后检查 remaining 续走(无剩余则保持上面设的 Idle)
+        if !remaining_left.is_empty() {
+            let next = remaining_left[0];
+            let new_remaining = remaining_left[1..].to_vec();
+            if let Some(d) = world.divisions.get_mut(&id) {
+                d.order = OrderState::Moving {
+                    dest: next, progress: 0.0, hostile: next_hostile,
+                    origin: dest, remaining: new_remaining,
+                };
             }
         }
     }
@@ -511,5 +532,43 @@ mod tests {
         assert!(div.is_moving(), "应续走(仍是 Moving)");
         assert_eq!(div.move_dest(), Some(3), "dest 应切到省3");
         assert_eq!(div.move_progress(), 0.0, "续走进度归零");
+    }
+
+    #[test]
+    fn t_multihop_pending_resolves_then_continues() {
+        // 决策5(Pending 路径): 师到省2 遇敌进 Pending(remaining=[3]),
+        // 战斗结束(敌人消失)→ 占领省2 → 续走省3
+        let mut w = chain_1_2_3_world();
+        // 省3 也设 FRA, 省2 放一个 FRA 师(org 归零会被清出战斗)
+        w.provinces.get_mut(&3).unwrap().controller = "FRA".into();
+        w.provinces.get_mut(&3).unwrap().owner = "FRA".into();
+        let enemy = Division {
+            id: 0, owner_tag: "FRA".into(), location_province: 2,
+            max_strength: 20.0, strength: 20.0, max_org: 60.0, org: 0.0,
+            ..Default::default()
+        };
+        w.add_division(enemy);
+        // GER 师 Moving dest=2 remaining=[3]
+        let d = Division {
+            id: 0, owner_tag: "GER".into(), location_province: 1,
+            order: OrderState::Moving {
+                dest: 2, progress: 0.99, hostile: true, origin: 1, remaining: vec![3],
+            },
+            max_org: 60.0, org: 60.0, max_strength: 20.0, strength: 20.0,
+            ..Default::default()
+        };
+        let did = w.add_division(d);
+        // 到达省2 → Pending(省2 有敌人)
+        advance_movement(&mut w);
+        let div = w.divisions.get(&did).unwrap();
+        assert!(div.is_pending(), "省2 有敌军应进 Pending, order={:?}", div.order);
+        // 模拟战斗结束: 移除 FRA 师, 省2 无敌人
+        let enemy_id = w.divisions.values().find(|d| d.owner_tag == "FRA").map(|d| d.id).unwrap();
+        w.divisions.remove(&enemy_id);
+        // 再 tick → Pending 结算(占领省2)→ 续走省3
+        advance_movement(&mut w);
+        let div = w.divisions.get(&did).unwrap();
+        assert!(div.is_moving(), "占领省2 后应续走省3");
+        assert_eq!(div.move_dest(), Some(3));
     }
 }

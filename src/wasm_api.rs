@@ -282,7 +282,7 @@ fn serialize_state(world: &World) -> String {
             OrderState::Idle => (0u32, 0u32, 0.0, 0u32, false, false),
             OrderState::Moving { dest, progress, hostile, .. } => (*dest, 0, *progress, 0, *hostile, false),
             OrderState::Retreating { dest, progress } => (*dest, 0, *progress, 0, false, true),
-            OrderState::Pending { dest } => (0, *dest, 0.0, 0, false, false),
+            OrderState::Pending { dest, .. } => (0, *dest, 0.0, 0, false, false),
             OrderState::Supporting { target } => (0, 0, 0.0, *target, false, false),
         };
         s.push_str(&format!(

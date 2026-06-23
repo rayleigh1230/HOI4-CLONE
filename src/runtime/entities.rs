@@ -39,8 +39,8 @@ pub enum OrderState {
     /// 对其他战斗系统不可见(check_engagements/占地判定跳过此状态的师)
     /// location_province 在 Retreating 期间保持撤退开始时的原值, 到达才改
     Retreating { dest: u32, progress: f64 },
-    /// 到达目标但战斗未胜, 等战斗胜利才结算归属
-    Pending { dest: u32 },
+    /// 到达目标但战斗未胜, 等战斗胜利才结算归属。remaining=战斗胜后续走的剩余路径
+    Pending { dest: u32, remaining: Vec<u32> },
     /// 支援攻击: 不移动, 作为攻方远程参战 target 省的战斗
     Supporting { target: u32 },
 }
@@ -128,7 +128,7 @@ impl Division {
         }
     }
     pub fn pending_dest(&self) -> Option<u32> {
-        if let OrderState::Pending { dest } = self.order {
+        if let OrderState::Pending { dest, .. } = self.order {
             Some(dest)
         } else {
             None
