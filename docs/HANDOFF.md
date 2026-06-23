@@ -1,7 +1,7 @@
 # hoi4-clone 项目交接文档
 
 > **用途**: 在新会话中继续开发。读本文件 + 列出的关键文件即可接上。
-> **更新**: 2026-06-22(OrderState 状态机重构 + 4 条状态机规则对齐 + 瞬移 bug 根治)
+> **更新**: 2026-06-23(多段路径行军 + 航点规划 + 支援攻击邻接收敛 + 路径失效应对)
 
 ---
 
@@ -12,7 +12,7 @@
 - **位置**: `G:\projects\hoi4-clone\`
 - **运行**: `cargo test`(测试) / `cargo run --bin hoi4_demo`(CLI) / 浏览器 `http://127.0.0.1:8765`(UI demo)
 - **工具链**: `stable-x86_64-pc-windows-gnu`(rustup override 绑定)
-- **规模**: ~5000 行 Rust + UI, **101 测试**, 297KB WASM
+- **规模**: ~5500 行 Rust + UI, **117 测试**, 315KB WASM
 
 ---
 
@@ -26,7 +26,33 @@
 | M4a | 装备系统(库存/消耗/增援) | 42 | m4a-complete |
 | 陆战循环 | 四量模型+撤退+歼灭+行军+包围+宽度+预备队+带溃 | 73 | (分支) |
 | 多战场+指令 | 多战场伤害累积+支援攻击+停止+防守撤退+预备队时机 | 99 | (阶段) |
-| **状态机重构** | **OrderState enum 替代 7 扁平字段 + 4 条规则对齐 + 瞬移根治** | **101** | **(本阶段)** |
+| 状态机重构 | OrderState enum 替代 7 扁平字段 + 4 条规则对齐 + 瞬移根治 | 101 | (阶段) |
+| **多段路径行军** | **自动寻路 + 航点规划 + 支援攻击邻接收敛 + 路径失效应对** | **117** | **(本阶段)** |
+
+### 本阶段核心改动: 多段路径行军(2026-06-23)
+
+**新增能力**: 师可沿多省路线逐段推进(点远处省自动 BFS 寻路), 支持追加航点。
+
+**数据结构**: `OrderState::Moving` 加 `remaining: Vec<u32>`(dest 走完之后还要去的省, 不含 dest); `OrderState::Pending` 也加 `remaining`(战斗胜后续走)。单段移动 = remaining 空, 行为不变。
+
+**新模块 `src/combat/pathfinding.rs`**: BFS 寻路 + 双插槽
+- `is_passable`(现在恒 true): 未来加"未开战不得入境""绕开驻军省"只改此函数
+- `edge_weight`(预留, 现权重全1=BFS): 未来加省份距离数据 → 自动升级为 Dijkstra(距离之和最短)
+
+**新增命令**:
+- `move_division`(改造): 下单时 BFS 寻路填 remaining; 战败/停止路径自动取消(Moving 变 Idle/Retreating)
+- `queue_move`(新): 追加航点到路径末尾(手机端友好, 无需 shift); Idle 时等同 move_division
+- `support_attack`(收敛, 决策13): 目标省须与师 location 相邻, 否则静默无效
+
+**行军推进**(`advance_movement`):
+- 到达中途省(占领)→ 检查 remaining 续走下一段(dest=下站, progress=0)
+- Pending 战斗胜利占领 → 也续走
+- 决策14 路径失效应对: dest 不可进入(`is_passable` 返回 false)→ 师停止(转 Idle); 强制中止函数 `invalidate_paths_to_inaccessible`(供未来投降/停战事件批量调用)
+
+**WASM**: 新增 `engine_queue_move` FFI; 序列化零改动(remaining 不暴露给 JS, 前端只画当前段)。
+
+**设计文档**: `docs/superpowers/specs/2026-06-23-multi-hop-marching-design.md`(14 条决策)
+**实现计划**: `docs/superpowers/plans/2026-06-23-multi-hop-marching.md`(11 Task)
 
 ### 本阶段核心改动: OrderState 状态机(2026-06-22)
 
@@ -203,7 +229,6 @@ web/
 
 | 规则 | defines值 | 优先级 |
 |---|---|---|
-| **多段路径行军(寻路)** | — | **高(下一阶段)** |
 | 堆叠惩罚 | COMBAT_STACKING_START=5, -2%/师 | 中 |
 | 超宽惩罚 | OVER_WIDTH -1%/%, max -33% | 中 |
 | 堑壕 | DIG_IN_FACTOR=0.02, CAP=5 | 中 |
@@ -214,18 +239,19 @@ web/
 | 战术系统 | TACTIC_SWAP=12h | 低 |
 | 计划加成 | PLANNING_MAX=0.3 | 低 |
 
-### 多段路径行军(寻路)设计要点(待实现)
-- Moving 加 `path: Vec<u32>` 字段(剩余中转省)
-- 用户点远处省 → BFS 寻路(可过任意省) → 逐段推进
-- 每到一个中转省更新归属地 + 推进到下一站
-- 途中遇敌开战, 胜后继续剩余路径(Pending 加 remaining_path)
+### 多段路径行军(寻路)设计要点(已实现 2026-06-23)
+详见 `docs/superpowers/specs/2026-06-23-multi-hop-marching-design.md`(14 条决策)。
+- Moving/Pending 加 `remaining: Vec<u32>`(dest 走完之后还要去的省)
+- 用户点远处省 → BFS 寻路 → 逐段推进, 到达中途省占领后续走
+- 途中遇敌开战, 胜后继续剩余路径(Pending 加 remaining)
+- 航点规划: `queue_move` 追加航点(手机端友好, 无需 shift)
+- 路径失效应对: dest 不可进入则停止 + `invalidate_paths_to_inaccessible` 强制中止函数
 - 前端只画当前段(零改动)
 
 ---
 
 ## 6. 后续系统(待做)
 
-- **多段路径行军**: 见 §5(下一阶段任务)
 - **生产系统**: 工厂→IC→生产线→产装备(现在装备靠"补给"按钮凭空给)
 - **AI对手**: FRA自动部署/防守/反击
 - **国策系统**: 加载核心国策, 点国策触发效果
@@ -283,3 +309,18 @@ cp target/wasm32-unknown-unknown/release/hoi4_clone.wasm web/
 | d0dc0d9 | feat 停止命令(stop_order)— 取消主动行动保留被动防守 |
 | 353a0ca | feat 防守主动撤退 — 战斗地块下移动到己方省变撤退 |
 | 2a7207a | feat 预备队判定时机 — 部署阶段同方向都进前线 |
+
+## 8b. 本阶段(2026-06-23)完成的提交 — 多段路径行军
+
+| 提交 | 内容 |
+|---|---|
+| 033876e | refactor Moving 加 remaining 字段(多段路径地基, 单段行为不变) |
+| 2073b1e | feat pathfinding.rs BFS 寻路模块 + is_passable 插槽 |
+| f2d4b2f | feat move_division 接入 BFS 寻路 + 边界B/C 处理 |
+| 8554d23 | feat 到达中途省后续走(决策5) — Capture 后检查 remaining |
+| 91d2b6c | feat Pending 战斗胜利后续走 — Pending 加 remaining 字段 |
+| e6d0f97 | feat support_attack 邻接收敛(决策13) — 只能相邻省发起 |
+| 2067e1d | feat queue_move 航点追加命令(决策9) — 手机端友好 |
+| bfd67e7 | feat 路径失效应对(决策14) — dest 不可进入则停止 + invalidate 函数 |
+| 12d2502 | feat wasm engine_queue_move FFI |
+| 41f4906 | test 多段行军边界测试补全(决策11/12) |
