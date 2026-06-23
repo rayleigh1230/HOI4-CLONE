@@ -113,6 +113,20 @@ pub extern "C" fn engine_support_attack(division_id: u32, target: u32) {
     });
 }
 
+/// 追加航点到师的行军路径(前端航点规划用, 手机端友好无需 shift)
+#[no_mangle]
+pub extern "C" fn engine_queue_move(division_id: u32, target: u32) {
+    ENGINE.with(|e| {
+        let mut e = e.borrow_mut();
+        let Engine { interp, world } = &mut *e;
+        let script = format!("queue_move = {{ division = {division_id} target = {target} }}");
+        if let Ok(b) = crate::parser::parse(&script) {
+            let effs = crate::ast::lower::lower_effects(&b);
+            interp.run(&effs, world);
+        }
+    });
+}
+
 /// 停止师的主动行动(进军/移动/支援); 保留被动防守和撤退
 #[no_mangle]
 pub extern "C" fn engine_stop_order(division_id: u32) {
