@@ -378,6 +378,73 @@ pub fn register(reg: &mut Registry) {
         Ok(())
     });
 
+    // 航点追加: 把目标追加到当前行军路径末尾(多段长程规划, 手机端友好无需 shift)。
+    // - 当前 Moving: 从路径末尾寻路到 target, 拼接到 remaining
+    // - 当前 Idle: 等同 move_division(从头寻路)
+    // - Pending/Retreating/Supporting: 忽略(决策11/4.4)
+    reg.register("queue_move", |w, p| {
+        let div_id = num_of(np(p, "queue_move", "division")?)? as u64;
+        let target = num_of(np(p, "queue_move", "target")?)? as u32;
+        // 读当前 location + owner(释放借用)
+        let (cur_loc, owner) = match w.divisions.get(&div_id) {
+            Some(d) => (d.location_province, d.owner_tag.clone()),
+            None => return Ok(()),
+        };
+        // 边界C: 同省忽略(无意义追加)
+        if target == cur_loc {
+            return Ok(());
+        }
+        // 读当前 order 决定追加(Moving)还是新建(Idle)
+        let order_snapshot = w.divisions.get(&div_id).map(|d| d.order.clone());
+        match order_snapshot {
+            Some(OrderState::Moving { dest, ref remaining, .. }) => {
+                // 路径末尾 = remaining 最后一个, 或 dest(remaining 空时)
+                let end_prov = remaining.last().copied().unwrap_or(dest);
+                if end_prov == target {
+                    return Ok(()); // 追加的就是当前末尾, 无意义
+                }
+                // 从末尾寻路到 target
+                let seg = match crate::combat::pathfinding::find_path(w, end_prov, target) {
+                    Some(s) => s,
+                    None => return Ok(()), // 不连通, 忽略
+                };
+                // 拼接到 remaining
+                if let Some(d) = w.divisions.get_mut(&div_id) {
+                    if let OrderState::Moving { ref mut remaining, .. } = d.order {
+                        remaining.extend(seg);
+                    }
+                }
+                Ok(())
+            }
+            Some(OrderState::Idle) => {
+                // 等同 move_division: 从 cur_loc 寻路到 target
+                let path = match crate::combat::pathfinding::find_path(w, cur_loc, target) {
+                    Some(p) => p,
+                    None => return Ok(()),
+                };
+                let first = path[0];
+                let remaining: Vec<u32> = path[1..].to_vec();
+                let hostile = w.provinces.get(&first)
+                    .map(|p| p.controller != owner).unwrap_or(false);
+                if let Some(d) = w.divisions.get_mut(&div_id) {
+                    d.order = OrderState::Moving {
+                        dest: first, progress: 0.0, hostile, origin: cur_loc, remaining,
+                    };
+                }
+                // 第一站有敌军 → 开战
+                let first_enemies: Vec<u64> = w.divisions.values()
+                    .filter(|d| d.location_province == first && d.owner_tag != owner && !d.is_withdrawing())
+                    .map(|d| d.id).collect();
+                if !first_enemies.is_empty() {
+                    join_as_attacker(w, div_id, first, &first_enemies);
+                }
+                Ok(())
+            }
+            // Pending/Retreating/Supporting → 忽略
+            _ => Ok(()),
+        }
+    });
+
     // trigger: 当前作用域师是否破阵
     reg.register_trigger("is_broken", |w, _p| {
         if let Some(did) = w.current_scope().division_id() {

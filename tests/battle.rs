@@ -1581,3 +1581,32 @@ fn support_attack_invalid_when_non_adjacent() {
     run_cmd(&mut world, &interp, &format!("support_attack = {{ division = {ger_id} target = 30 }}"));
     assert!(!world.divisions.get(&ger_id).unwrap().is_supporting(), "不相邻省支援应无效");
 }
+
+#[test]
+fn t_queue_move_appends_waypoint() {
+    // 决策9/10: queue_move 追加目标到路径末尾
+    let mut reg = Registry::new();
+    register_all(&mut reg);
+    let interp = Interpreter::new(reg);
+    let mut world = chain_world_owned(); // 1-2-3 全 GER
+    // 扩展到 4 省: 1-2-3-4(双向邻接)
+    world.provinces.insert(4, hoi4_clone::runtime::Province {
+        id: 4, owner: "GER".into(), controller: "GER".into(),
+        terrain: "plains".into(), neighbors: vec![3],
+    });
+    world.provinces.get_mut(&3).unwrap().neighbors.push(4);
+    // 建师在省1
+    run_setup(&mut world, &interp, r#"
+        _setup = { create_division = { owner = GER location = 1 soft_attack = 10 defense = 10 max_org = 60 } }
+    "#);
+    let did = *world.divisions.keys().next().unwrap();
+    // queue_move 到省3(寻路 1→2→3)
+    run_cmd(&mut world, &interp, &format!("queue_move = {{ division = {did} target = 3 }}"));
+    // 再 queue_move 到省4(追加: 当前路径末尾省3 → 寻路到省4, 拼接)
+    run_cmd(&mut world, &interp, &format!("queue_move = {{ division = {did} target = 4 }}"));
+    // 推进足够长 → 应到达省4(经 1→2→3→4)
+    GameClock::advance(&interp, &mut world, 90);
+    let div = world.divisions.get(&did).unwrap();
+    assert_eq!(div.location_province, 4, "应到达追加的航点省4");
+    assert!(div.is_idle());
+}
