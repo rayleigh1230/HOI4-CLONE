@@ -274,26 +274,44 @@ pub fn register(reg: &mut Registry) {
             }
             return Ok(());
         }
-        // 查目标省有无敌军(非己方的师; 排除撤退师 — 撤退师不当守方被重新拉入)
-        let enemies: Vec<u64> = w.divisions.values()
-            .filter(|d| d.location_province == target && d.owner_tag != owner && !d.is_withdrawing())
-            .map(|d| d.id)
-            .collect();
-        // 进军判定: 目标省非己方控制 → 进军红箭头(无论有无敌军)
-        let target_controller = w.provinces.get(&target).map(|p| p.controller.as_str()).unwrap_or("");
-        let is_hostile = target_controller != owner;
-        // 设移动状态: 进入 Moving, 记录 origin=当前省
-        // remaining 暂为空(后续 Task 用寻路结果填充); 单段移动 = remaining 空
+        // 【边界B】师在 Pending/Retreating/Supporting → 忽略移动命令(不能中断战斗/撤退/支援)
+        let blocked_state = match w.divisions.get(&div_id) {
+            Some(d) => d.is_pending() || d.is_withdrawing() || d.is_supporting(),
+            None => false,
+        };
+        if blocked_state {
+            return Ok(());
+        }
+        // 【边界C】目标 == 当前省 → 忽略(无意义命令)
+        if target == cur_loc {
+            return Ok(());
+        }
+        // 【寻路】find_path 返回 [下一站, ..., 最终目标]; None 则师不动
+        let path = match crate::combat::pathfinding::find_path(w, cur_loc, target) {
+            Some(p) => p,
+            None => return Ok(()), // 不连通或目标不在地图, 静默忽略
+        };
+        // path 非空: 拆成 dest(第一站) + remaining(后续站, 不含 dest)
+        let first = path[0];
+        let remaining: Vec<u32> = path[1..].to_vec();
+        // 进军判定: 第一站非己方控制 → 进军红箭头
+        let first_controller = w.provinces.get(&first).map(|p| p.controller.as_str()).unwrap_or("");
+        let is_hostile = first_controller != owner;
+        // 设移动状态: dest=第一站, remaining=后续站
         if let Some(d) = w.divisions.get_mut(&div_id) {
             d.order = OrderState::Moving {
-                dest: target, progress: 0.0,
+                dest: first, progress: 0.0,
                 hostile: is_hostile, origin: cur_loc,
-                remaining: vec![],
+                remaining,
             };
         }
-        // 有敌军防守 → 开战: 加入或新建战斗(复用 join_as_attacker)
-        if !enemies.is_empty() {
-            join_as_attacker(w, div_id, target, &enemies);
+        // 第一站有敌军防守 → 开战: 加入或新建战斗(复用 join_as_attacker)
+        let first_enemies: Vec<u64> = w.divisions.values()
+            .filter(|d| d.location_province == first && d.owner_tag != owner && !d.is_withdrawing())
+            .map(|d| d.id)
+            .collect();
+        if !first_enemies.is_empty() {
+            join_as_attacker(w, div_id, first, &first_enemies);
         }
         Ok(())
     });

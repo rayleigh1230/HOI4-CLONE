@@ -568,12 +568,12 @@ fn move_to_enemy_province_starts_battle_immediately() {
     let mut world = setup_world();
     run_setup(&mut world, &interp, r#"
         _setup = {
-            create_division = { owner = GER location = 2 equipment = medium_tank battalions = 7 }
+            create_division = { owner = GER location = 10 equipment = medium_tank battalions = 7 }
             create_division = { owner = FRA location = 1 equipment = infantry_equipment battalions = 7 }
         }
     "#);
     let ger_id = world.divisions.values().find(|d| d.owner_tag == "GER").unwrap().id;
-    // GER 在省2, 命令移到省1(FRA 所在) → 应立刻开战
+    // GER 在省10, 命令移到省1(FRA 所在, 相邻) → 应立刻开战
     assert_eq!(world.battles.len(), 0, "下令前无战斗");
     let move_effs = hoi4_clone::ast::lower::lower_effects(
         &hoi4_clone::parser::parse("move_division = { division = 1 target = 1 }").unwrap()
@@ -589,16 +589,25 @@ fn move_to_empty_province_no_battle() {
     let mut reg = Registry::new();
     register_all(&mut reg);
     let interp = Interpreter::new(reg);
-    let mut world = setup_world();
+    let mut world = World::new();
+    world.player_tag = "GER".into();
+    world.countries.insert("GER".into(), Default::default());
+    // 省10(GER) 邻接 省1(GER空省, 无部队)
+    world.provinces.insert(10, hoi4_clone::runtime::Province {
+        id: 10, owner: "GER".into(), controller: "GER".into(),
+        terrain: "plains".into(), neighbors: vec![1],
+    });
+    world.provinces.insert(1, hoi4_clone::runtime::Province {
+        id: 1, owner: "GER".into(), controller: "GER".into(),
+        terrain: "plains".into(), neighbors: vec![10],
+    });
     run_setup(&mut world, &interp, r#"
-        _setup = {
-            create_division = { owner = GER location = 2 equipment = infantry_equipment battalions = 7 }
-        }
+        _setup = { create_division = { owner = GER location = 10 equipment = infantry_equipment battalions = 7 } }
     "#);
     let ger_id = world.divisions.values().find(|d| d.owner_tag == "GER").unwrap().id;
-    // 省10 是 GER 己方空省, 移过去不开战
+    // 省1 是 GER 己方空省, 移过去不开战
     let move_effs = hoi4_clone::ast::lower::lower_effects(
-        &hoi4_clone::parser::parse("move_division = { division = 1 target = 10 }").unwrap()
+        &hoi4_clone::parser::parse("move_division = { division = 1 target = 1 }").unwrap()
     );
     interp.run(&move_effs, &mut world);
     assert_eq!(world.battles.len(), 0, "移到己方空省不应开战");
@@ -606,7 +615,7 @@ fn move_to_empty_province_no_battle() {
     // 推进到达
     use hoi4_clone::runtime::GameClock;
     GameClock::advance(&interp, &mut world, 100);
-    assert_eq!(world.divisions.get(&ger_id).unwrap().location_province, 10, "应到达省10");
+    assert_eq!(world.divisions.get(&ger_id).unwrap().location_province, 1, "应到达省1");
 }
 
 #[test]
@@ -660,7 +669,7 @@ fn frontline_route_causes_reserve_routing() {
     // 改: 用大宽度让第3个进预备队。combat_width=40的两个师=80>70, 第2个进预备队
     run_setup(&mut world, &interp, r#"
         _setup = {
-            create_division = { owner = GER location = 2 equipment = medium_tank battalions = 7 }
+            create_division = { owner = GER location = 10 equipment = medium_tank battalions = 7 }
             create_division = { owner = FRA location = 1 equipment = infantry_equipment battalions = 7 soft_attack = 0 defense = 5 max_org = 10 }
             create_division = { owner = FRA location = 1 equipment = infantry_equipment battalions = 7 soft_attack = 0 defense = 5 max_org = 10 }
         }
@@ -1454,4 +1463,90 @@ fn after_started_same_origin_goes_reserve() {
         battle.reserve_attackers.contains(&ger_ids[1]),
         "started=true 后同 origin 后到的师应在预备队, res={:?}", battle.reserve_attackers
     );
+}
+
+// ===== 多段路径行军(move_division 接入寻路)=====
+
+/// 3 省链拓扑: 1-2-3, 全部初始为己方(GER), 便于纯移动测试
+fn chain_world_owned() -> World {
+    let mut w = World::new();
+    w.player_tag = "GER".into();
+    w.provinces.insert(1, hoi4_clone::runtime::Province {
+        id: 1, owner: "GER".into(), controller: "GER".into(),
+        terrain: "plains".into(), neighbors: vec![2],
+    });
+    w.provinces.insert(2, hoi4_clone::runtime::Province {
+        id: 2, owner: "GER".into(), controller: "GER".into(),
+        terrain: "plains".into(), neighbors: vec![1, 3],
+    });
+    w.provinces.insert(3, hoi4_clone::runtime::Province {
+        id: 3, owner: "GER".into(), controller: "GER".into(),
+        terrain: "plains".into(), neighbors: vec![2],
+    });
+    w
+}
+
+#[test]
+fn t_multihop_move_occupies_each_segment() {
+    // 决策5/10: 师从省1 move_division 到省3(不相邻), 寻路 1→2→3, 逐段占领
+    let mut reg = Registry::new();
+    register_all(&mut reg);
+    let interp = Interpreter::new(reg);
+    let mut world = chain_world_owned();
+    run_setup(&mut world, &interp, r#"
+        _setup = {
+            create_division = { owner = GER location = 1 soft_attack = 10 defense = 10 max_org = 60 }
+        }
+    "#);
+    let did = *world.divisions.keys().next().unwrap();
+    // 下令去省3(不相邻, 需寻路 1→2→3)
+    run_cmd(&mut world, &interp, &format!("move_division = {{ division = {did} target = 3 }}"));
+    // 寻路成功: 师朝省2 走(dest=2, remaining=[3])—寻路第1站
+    {
+        let div = world.divisions.get(&did).unwrap();
+        assert!(div.is_moving(), "下令后应 Moving");
+        assert_eq!(div.move_dest(), Some(2), "第1段 dest 应为省2(寻路第1站)");
+    }
+    // 推进 ~21h 到达省2(第1段), 占领省2
+    // 注: Task4 续走逻辑尚未实现, 到达省2后转 Idle(后续 Task 实现续走后再加强此测试)
+    GameClock::advance(&interp, &mut world, 21);
+    let div = world.divisions.get(&did).unwrap();
+    assert_eq!(div.location_province, 2, "到达省2 后归属地应为2");
+}
+
+#[test]
+fn t_move_to_same_province_ignored() {
+    // 决策12: 目标 == 当前省 → 忽略
+    let mut reg = Registry::new();
+    register_all(&mut reg);
+    let interp = Interpreter::new(reg);
+    let mut world = chain_world_owned();
+    run_setup(&mut world, &interp, r#"
+        _setup = { create_division = { owner = GER location = 2 soft_attack = 10 defense = 10 max_org = 60 } }
+    "#);
+    let did = *world.divisions.keys().next().unwrap();
+    // 下令去自己所在的省2 — 应忽略
+    run_cmd(&mut world, &interp, &format!("move_division = {{ division = {did} target = 2 }}"));
+    let div = world.divisions.get(&did).unwrap();
+    assert!(div.is_idle(), "同省命令应忽略, 保持 Idle");
+}
+
+#[test]
+fn t_find_path_no_route_ignored() {
+    // 寻路失败(不连通)→ 师不动
+    let mut reg = Registry::new();
+    register_all(&mut reg);
+    let interp = Interpreter::new(reg);
+    let mut world = chain_world_owned();
+    // 加一个孤立省 99(与任何省都不邻接)
+    world.provinces.insert(99, hoi4_clone::runtime::Province {
+        id: 99, owner: "GER".into(), controller: "GER".into(),
+        terrain: "plains".into(), neighbors: vec![],
+    });
+    run_setup(&mut world, &interp, r#"
+        _setup = { create_division = { owner = GER location = 1 soft_attack = 10 defense = 10 max_org = 60 } }
+    "#);
+    let did = *world.divisions.keys().next().unwrap();
+    run_cmd(&mut world, &interp, &format!("move_division = {{ division = {did} target = 99 }}"));
+    assert!(world.divisions.get(&did).unwrap().is_idle(), "寻路失败应忽略, 保持 Idle");
 }
