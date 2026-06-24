@@ -1,5 +1,6 @@
 //! 战斗相关命令注册(M3-4)
 use crate::ast::Arg;
+use crate::data::template::DivisionStats;
 use crate::runtime::entities::{Battle, Division, OrderState};
 use crate::runtime::error::CmdError;
 use crate::runtime::registry::ParamGet;
@@ -13,6 +14,38 @@ fn np<'a>(p: &'a [(String, Arg)], cmd: &str, key: &str) -> Result<&'a Arg, CmdEr
 }
 fn num_of(a: &Arg) -> Result<f64, CmdError> {
     a.as_num().ok_or_else(|| CmdError::RuntimeError(format!("期望数字, 得 {:?}", a)))
+}
+
+/// 从汇总属性构建 Division(新路径: 数据驱动)
+fn build_division_from_stats(owner: &str, loc: u32, stats: DivisionStats) -> Division {
+    let mut eq_need = std::collections::HashMap::new();
+    let mut eq_held = std::collections::HashMap::new();
+    for (eq, qty) in &stats.equipment_need {
+        eq_need.insert(eq.clone(), *qty);
+        eq_held.insert(eq.clone(), *qty);  // 建师时满编
+    }
+    Division {
+        id: 0,
+        owner_tag: owner.into(),
+        location_province: loc,
+        soft_attack: stats.soft_attack,
+        hard_attack: stats.hard_attack,
+        defense: stats.defense,
+        breakthrough: stats.breakthrough,
+        armor: stats.armor,
+        piercing: stats.piercing,
+        hardness: stats.hardness,
+        combat_width: stats.combat_width,
+        max_org: stats.max_org,
+        org: stats.max_org,
+        max_strength: stats.max_strength,
+        strength: stats.max_strength,
+        equipment_need: eq_need,
+        equipment_held: eq_held,
+        manpower_need: stats.manpower_need,
+        manpower_held: stats.manpower_need,
+        order: OrderState::Idle,
+    }
 }
 
 /// 把师作为攻方加入目标省的战斗(move_division 和 support_attack 共用)。
@@ -96,9 +129,20 @@ pub fn register(reg: &mut Registry) {
             .ok_or_else(|| CmdError::RuntimeError("owner 应为字符串".into()))?;
         let loc = num_of(np(p, "create_division", "location")?)? as u32;
         let opt_num = |k: &str| ParamGet::get(p, k).and_then(Arg::as_num);
-        // 支持两种建师方式:
-        // 1) 按营数: battalions=7 + equipment=infantry_equipment → 自动算真实数值(1936)
+        // 支持三种建师方式:
+        // 0) 按模板: template="xxx" → 查 GameData 汇总(数据驱动, 新路径)
+        // 1) 按营数: battalions=7 + equipment=infantry_equipment → 自动算真实数值(1936, 旧路径)
         // 2) 手填: 显式给 soft_attack/defense/... (兼容旧脚本)
+        if let Some(tmpl_name) = ParamGet::get(p, "template").and_then(Arg::as_str) {
+            // 新路径: 数据驱动汇总
+            let stats = match w.data.templates.get(tmpl_name) {
+                Some(t) => t.to_division_stats(&w.data),
+                None => return Err(CmdError::RuntimeError(format!("未知模板: {tmpl_name}"))),
+            };
+            let d = build_division_from_stats(owner, loc, stats);
+            w.add_division(d);
+            return Ok(());
+        }
         let (sa, ha, df, br, ar, pr, hd, cw, max_org, max_str, mp_total, eq_amt) =
             if let Some(bn) = opt_num("battalions") {
                 // 按营数 + 装备查表

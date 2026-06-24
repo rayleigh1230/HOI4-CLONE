@@ -4,7 +4,6 @@
 //! - 结构属性(hp/org/width/manpower): sub_unit 定义自身
 //! - 战斗属性(攻/防/装甲): 来自 need 装备 × 件数比例
 
-use crate::data::equipment::EquipmentDef;
 use crate::data::{EquipStats, GameData};
 use crate::parser::{Block, Value};
 use std::collections::HashMap;
@@ -174,6 +173,7 @@ fn parse_battalion_mults(block: &Block) -> Vec<BattalionMult> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::equipment::EquipmentDef;
     use crate::data::GameData;
 
     fn inf_eq() -> EquipmentDef {

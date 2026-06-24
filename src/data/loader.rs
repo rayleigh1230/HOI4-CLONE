@@ -88,6 +88,30 @@ pub fn load_chassis(data: &mut GameData, src: &str) {
             data.equipment.insert(equip.name.clone(), equip);
         }
     }
+
+    // 第四遍: 为每个 archetype 注册"最新型号"别名
+    // 营的 need 引用 archetype 名(如 infantry_equipment), 但可生产型号是
+    // infantry_equipment_1/_2/_3。别名指向 year 最大的型号, 让 need 能查到。
+    let archetypes: Vec<String> = raw
+        .keys()
+        .filter(|n| data.chassis.get(*n).map(|c| c.is_archetype).unwrap_or(false))
+        .cloned()
+        .collect();
+    for arch in archetypes {
+        // 找该 archetype 下 year 最大的型号
+        // 先快照(避免借用冲突: 迭代 equipment 时不能同时可变插入)
+        let latest: Option<EquipmentDef> = data
+            .equipment
+            .values()
+            .filter(|e| e.chassis == arch)
+            .max_by_key(|e| e.year)
+            .cloned();
+        if let Some(latest_eq) = latest {
+            // 仅当 archetype 名尚未直接存在于 equipment 表时才注册别名
+            // (避免覆盖真实型号条目)
+            data.equipment.entry(arch).or_insert(latest_eq);
+        }
+    }
 }
 
 /// 解析单个底盘定义
@@ -247,7 +271,7 @@ pub fn load_sub_units(data: &mut GameData, src: &str) {
     }
 }
 
-/// 解析模板文件(history/countries/*.txt)
+/// 解析模板文件(history/units/*.txt, 即 OOB 文件)
 /// 一个文件可含多个 division_template 块
 pub fn load_templates(data: &mut GameData, src: &str) {
     let block = match crate::parser::parse(src) {
@@ -288,7 +312,7 @@ pub fn load_all() -> GameData {
     load_sub_units(&mut data, include_str!("../data_raw/units/artillery.txt"));
     load_sub_units(&mut data, include_str!("../data_raw/units/medium_armor.txt"));
 
-    // 阶段4: 模板(依赖营)
+    // 阶段4: 模板(依赖营) — OOB 文件(history/units/*.txt)
     load_templates(&mut data, include_str!("../data_raw/history/GER.txt"));
 
     data

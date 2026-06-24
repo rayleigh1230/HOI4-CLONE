@@ -25,6 +25,8 @@ impl Token {
 }
 
 pub fn lex(src: &str) -> Result<Vec<Token>, ParseError> {
+    // 跳过 UTF-8 BOM(Windows 工具常加, 原版数据文件有)
+    let src = src.strip_prefix('\u{feff}').unwrap_or(src);
     let chars: Vec<char> = src.chars().collect();
     let mut i = 0usize;
     let mut line = 1usize;
@@ -63,14 +65,18 @@ pub fn lex(src: &str) -> Result<Vec<Token>, ParseError> {
                 if chars[i] == '-' { i += 1; }
                 while i < chars.len() && (chars[i].is_ascii_digit() || chars[i] == '.') { i += 1; }
                 let s: String = chars[start..i].iter().collect();
-                let n: f64 = s
-                    .parse()
-                    .map_err(|_| ParseError::Syntax { line, msg: format!("非法数字: {s}") })?;
-                out.push(Token::Num(n));
+                // 尝试解析为 f64; 失败(如日期 1939.1.1、版本号)则当字符串 token
+                match s.parse::<f64>() {
+                    Ok(n) if n.is_finite() => out.push(Token::Num(n)),
+                    _ => out.push(Token::Str(s)),
+                }
             }
             a if a.is_ascii_alphabetic() || a == '_' => {
                 let start = i;
-                while i < chars.len() && (chars[i].is_ascii_alphanumeric() || chars[i] == '_') {
+                // ident 字符集含 ':' (HOI4 命名空间限定, 如 mio:GER_xxx / sp:sp_xxx)
+                while i < chars.len()
+                    && (chars[i].is_ascii_alphanumeric() || chars[i] == '_' || chars[i] == ':')
+                {
                     i += 1;
                 }
                 let s: String = chars[start..i].iter().collect();

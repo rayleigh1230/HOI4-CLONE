@@ -6,6 +6,16 @@ use hoi4_clone::commands::register_all;
 use hoi4_clone::parser::{parse, Value};
 use hoi4_clone::runtime::{Interpreter, Registry, World};
 
+/// 用注册好的解释器执行一段脚本(辅助)
+fn run_script(src: &str, w: &mut World) {
+    let mut reg = Registry::new();
+    register_all(&mut reg);
+    let interp = Interpreter::new(reg);
+    let b = parse(src).expect("脚本解析失败");
+    let effs = lower_effects(&b);
+    interp.run(&effs, w);
+}
+
 /// 从解析后的 Block 中按 key 取出子块
 fn reward_block(b: &hoi4_clone::parser::Block) -> &hoi4_clone::parser::Block {
     let f = b.fields.iter().find(|f| f.key == "completion_reward").expect("应有 completion_reward");
@@ -171,4 +181,40 @@ fn full_focus_tree_parse_and_execute() {
 
     assert!((world.get_var("political_power") - 100.0).abs() < 1e-9);
     assert!(world.has_flag("demo_done"));
+}
+
+#[test]
+fn t_create_division_from_template() {
+    // 端到端: create_division 用 template 参数走数据驱动汇总
+    let mut w = World::new();
+    // 取 GameData 里第一个可用模板(德国 OOB 加载的真实模板)
+    let tmpl_name = w.data.templates.keys().next()
+        .expect("GameData 应至少有一个模板").clone();
+    let script = format!(
+        "create_division = {{ owner = GER template = \"{}\" location = 1 }}",
+        tmpl_name
+    );
+    run_script(&script, &mut w);
+    assert_eq!(w.divisions_of("GER").len(), 1, "应建出 1 个师(模板={})", tmpl_name);
+    let did = *w.divisions_of("GER").first().unwrap();
+    let d = w.divisions.get(&did).unwrap();
+    // 数据驱动师应有非零属性(由真实模板汇总算出)
+    assert!(d.combat_width > 0.0, "应有战斗宽度, 实际 {}", d.combat_width);
+    assert!(d.max_strength > 0.0, "应有 HP, 实际 {}", d.max_strength);
+}
+
+#[test]
+fn t_create_division_unknown_template_errors() {
+    // 未知模板应返回错误(而非静默建空师)
+    let mut w = World::new();
+    let script = "create_division = { owner = GER template = \"nonexistent_xyz\" location = 1 }";
+    let mut reg = Registry::new();
+    register_all(&mut reg);
+    let interp = Interpreter::new(reg);
+    let b = parse(script).unwrap();
+    let effs = lower_effects(&b);
+    interp.run(&effs, &mut w);
+    // 未知模板 → error_log 应记录错误, 且不建师
+    assert!(!w.error_log.is_empty(), "未知模板应产生错误");
+    assert_eq!(w.divisions_of("GER").len(), 0, "未知模板不应建师");
 }
