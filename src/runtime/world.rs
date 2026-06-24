@@ -1,5 +1,6 @@
 //! World: 游戏状态(M3: 加实体存储 + 作用域栈)
 use crate::ast::Effect;
+use crate::data::GameData;
 use crate::runtime::entities::{Battle, Country, Division, Province, Scope};
 use crate::runtime::error::CmdError;
 use std::collections::HashMap;
@@ -25,6 +26,8 @@ pub struct World {
     /// 游戏是否已开始(首次 tick 后置 true)。
     /// started=false 时(部署阶段), 同方向进攻师都进前线; started=true 后同 origin 后到的进预备队。
     pub started: bool,
+    /// 只读静态定义数据库(数据驱动层)
+    pub data: std::sync::Arc<GameData>,
 }
 
 impl Default for World {
@@ -45,6 +48,7 @@ impl Default for World {
             next_division_id: 1,
             next_battle_id: 1,
             started: false,
+            data: crate::data::cached_game_data(),
         }
     }
 }
@@ -188,5 +192,12 @@ mod tests {
         assert_eq!(id, 1);
         assert_eq!(w.next_division_id, 2);
         assert_eq!(w.divisions_of("GER").len(), 1);
+    }
+
+    #[test]
+    fn t_world_carries_game_data() {
+        let w = World::new();
+        assert!(!w.data.equipment.is_empty(), "World 应持有非空 GameData");
+        assert!(!w.data.sub_units.is_empty(), "应含营定义");
     }
 }

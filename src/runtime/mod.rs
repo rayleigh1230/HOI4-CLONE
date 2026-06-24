@@ -7,6 +7,7 @@ pub mod registry;
 pub mod world;
 
 pub use clock::GameClock;
+pub use crate::data::GameData;
 pub use entities::{Battle, Country, Division, Province, Scope};
 pub use error::CmdError;
 pub use interp::Interpreter;
