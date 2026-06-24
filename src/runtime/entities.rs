@@ -1,12 +1,30 @@
 //! 游戏实体结构(M3)
+use std::collections::HashMap;
+
 #[derive(Debug, Clone, Default)]
 pub struct Province {
     pub id: u32,
-    pub owner: String,
-    pub controller: String,
+    /// 所属 State id(归属从 State 派生, Province 不再存 owner/controller)
+    pub state_id: u32,
     pub terrain: String,
     /// 邻接省份 id 列表(行军/撤退的基础设施)
     pub neighbors: Vec<u32>,
+}
+
+/// 州/地区(Province 的上级容器, 归属/建筑/人力的唯一权威源)
+/// 可变运行时状态(进 World, 不进 GameData)
+/// 设计见 docs/superpowers/specs/2026-06-24-state-concept-design.md
+#[derive(Debug, Clone, Default)]
+pub struct State {
+    pub id: u32,
+    pub name: String,              // "STATE_1"(本地化 key)
+    pub owner: String,             // 法理归属(谁拥有这片领土)
+    pub controller: String,        // 实际控制(可能被占领, ≠ owner)
+    pub manpower: f64,             // 人力(征兵来源)
+    pub state_category: String,    // "town"/"city"/"megalopolis"(决定建筑槽位)
+    pub cores: Vec<String>,        // 核心国 tag(谁有合法领土声索)
+    pub buildings: HashMap<String, f64>,  // 建筑占位映射(后续建筑系统升级)
+    pub provinces: Vec<u32>,       // 这个 State 包含哪些省份(正向映射)
 }
 
 #[derive(Debug, Clone, Default)]

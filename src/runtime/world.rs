@@ -1,7 +1,7 @@
 //! World: 游戏状态(M3: 加实体存储 + 作用域栈)
 use crate::ast::Effect;
 use crate::data::GameData;
-use crate::runtime::entities::{Battle, Country, Division, Province, Scope};
+use crate::runtime::entities::{Battle, Country, Division, Province, Scope, State};
 use crate::runtime::error::CmdError;
 use std::collections::HashMap;
 
@@ -17,6 +17,7 @@ pub struct World {
     pub event_bus: HashMap<String, Vec<Effect>>,
     // M3 实体存储
     pub provinces: HashMap<u32, Province>,
+    pub states: HashMap<u32, State>,
     pub countries: HashMap<String, Country>,
     pub divisions: HashMap<u64, Division>,
     pub battles: Vec<Battle>,
@@ -41,6 +42,7 @@ impl Default for World {
             error_log: Vec::new(),
             event_bus: Default::default(),
             provinces: Default::default(),
+            states: Default::default(),
             countries: Default::default(),
             divisions: Default::default(),
             battles: Vec::new(),
@@ -123,12 +125,41 @@ impl World {
             .collect()
     }
 
+    // ===== State 派生查询(Province 归属从 State 派生) =====
+
+    /// 省份 → 所属 State id
+    pub fn province_state(&self, province_id: u32) -> Option<u32> {
+        self.provinces.get(&province_id).map(|p| p.state_id)
+    }
+
+    /// 省份的实际控制者(从 State 派生; 找不到返回 None → 中立)
+    pub fn province_controller(&self, province_id: u32) -> Option<&str> {
+        let sid = self.province_state(province_id)?;
+        self.states.get(&sid).map(|s| s.controller.as_str())
+    }
+
+    /// 省份的法理归属者(从 State 派生)
+    pub fn province_owner(&self, province_id: u32) -> Option<&str> {
+        let sid = self.province_state(province_id)?;
+        self.states.get(&sid).map(|s| s.owner.as_str())
+    }
+
+    /// 设置省份的实际控制者(改所属 State 的 controller; 省份自动跟随)
+    /// 占领用: 只改 controller, 不改 owner(法理归属不变)
+    pub fn set_state_controller(&mut self, province_id: u32, new_controller: &str) {
+        if let Some(sid) = self.province_state(province_id) {
+            if let Some(state) = self.states.get_mut(&sid) {
+                state.controller = new_controller.into();
+            }
+        }
+    }
+
     // 行军辅助(陆战循环)
     /// 找某省的邻接己方省(撤退目标)。无则返回 None(被包围)
     pub fn friendly_neighbor(&self, province: u32, tag: &str) -> Option<u32> {
         let prov = self.provinces.get(&province)?;
         prov.neighbors.iter().copied().find(|n| {
-            self.provinces.get(n).map(|p| p.controller == tag).unwrap_or(false)
+            self.province_controller(*n).map(|c| c == tag).unwrap_or(false)
         })
     }
 
