@@ -253,6 +253,51 @@ impl CombatContext {
 
 3. **terrain_modifiers 是占位**。本次提供一个返回空栈的版本(无地形数据), 后续地形系统实现时填真实地形修正。
 
+### 3.4 快照设计支持动态 modifier(昼夜/天气/季节)
+
+CombatContext 的快照设计**天然支持随时间变化的 modifier**——不只是静态的地形, 昼夜、天气、季节这类动态修正也能冻结进快照。这是快照优于"结算时实时读 world"的关键场景。
+
+**数据流(以昼夜为例)**:
+
+```
+主循环每小时(clock.rs tick):
+  1. hour += 1
+  2. 算当前小时各省的 darkness(依赖纬度+日期) → 存 world   ← 主循环算
+  3. resolve_all_battles:
+       CombatContext::build(world, battle):
+         遍历参战师:
+           省份层: stack.merge( terrain_modifiers(p.terrain)
+                              + night_modifier(world.darkness[p.id]) )
+                                                    ↑ build 时读一次, 冻结进快照
+         → 快照已含该小时的夜间修正
+       resolve_hour(ctx): 用快照结算, 不再读 world
+```
+
+**为什么快照适合动态 modifier**:
+- **同一小时用同一个 darkness**: 一场小时级战斗内 darkness 不变, 快照保证这一点。
+- **无借用冲突**: darkness 在 build 前算好存 world, build 时只读, 结算时只读快照+写 division——不碰 world。
+- **可调试**: 快照可序列化复现某小时的完整修正状态。
+
+**原版昼夜机制(查证自 defines + wiki)**:
+- `BASE_NIGHT_ATTACK_PENALTY = -0.5`: 夜间攻击惩罚基础值
+- `night` 是 province modifier, `# Multiplied by amount of darkness`
+- darkness ∈ [0.0, 1.0]: 0=白天, 1=全黑, 之间是黎明/黄昏过渡
+- 实际惩罚 = -0.5 × darkness(全黑 ×0.5 攻击, 半黑 ×0.75)
+- darkness 由**省份纬度 + 当前日期**算出(北欧冬夜长, 赤道全年均分)
+- 科技(夜视仪)和 `night_attack` 属性可抵消此惩罚
+
+**本次处理**: modifier 层的快照已就位(支持任何动态 modifier)。但 darkness 数据用占位:
+- `night_modifier(darkness)` 占位函数, 默认 darkness=0(白天, 无惩罚)
+- 现有测试不破(默认无夜间修正)
+
+**昼夜系统的数据前提(后续独立做, 不改 modifier 层)**:
+1. `Province` 加纬度(或简化的纬度带)
+2. `World` 加日期(年月日, 不只是 hour)
+3. 主循环每小时算 darkness 存 `World.darkness: HashMap<省份id, f64>`
+4. `CombatContext::build` 省份层加一行 `night_modifier(world.darkness[prov])`
+
+**核心**: 昼夜系统后续做时, 只往 CombatContext::build 的省份层 push 一个动态 modifier, **不改 resolve.rs、不改 effective_*、不改 ModifierStack**。快照设计让动态 modifier 和静态 modifier 走同一条路。
+
 ---
 
 ## 4. 结算点改造(接口口子)
@@ -445,6 +490,7 @@ src/combat/modifier.rs   ← 新增: Modifier/ModifierStat/ModifierOp/ModifierSt
 | 将领特质 | add_division_modifier / 将领 scope |
 | 堑壕 | 战斗系统每小时 dig_in++, 转 add_division_modifier |
 | 地形 | terrain_modifiers 函数填真实地形修正(替换占位空栈) |
+| **昼夜** | Province 加纬度 + World 加日期; 主循环算 darkness; CombatContext::build 省份层加 night_modifier(darkness)。动态 modifier, 快照天然支持(见 §3.4) |
 | 战术 | 战斗时往 CombatContext 加战术层(push 一个 Multiply) |
 | 补给不足 | add_division_modifier(stat=soft_attack_factor value=-0.25) |
 | ideas 文件 | loader 读 idea 块的 modifier, 走 parse_modifier_token |
