@@ -218,3 +218,83 @@ fn t_create_division_unknown_template_errors() {
     assert!(!w.error_log.is_empty(), "未知模板应产生错误");
     assert_eq!(w.divisions_of("GER").len(), 0, "未知模板不应建师");
 }
+
+#[test]
+fn t_country_modifier_affects_combat() {
+    // GER 加 +100% soft_attack(Add), 战斗伤害应显著提升
+    use hoi4_clone::runtime::{World, Interpreter, Registry, GameClock};
+    use hoi4_clone::commands::register_all;
+    use hoi4_clone::ast::lower::lower_effects;
+    use hoi4_clone::parser::parse;
+
+    let mut w = World::new();
+    let mut reg = Registry::new();
+    register_all(&mut reg);
+    let interp = Interpreter::new(reg);
+
+    // 先加 modifier
+    let setup = r#"
+        add_country_modifier = { tag = GER stat = soft_attack value = 1.0 }
+    "#;
+    interp.run(&lower_effects(&parse(setup).unwrap()), &mut w);
+
+    // 建 GER 师和 FRA 师, 开战
+    let battle_setup = r#"
+        create_division = { owner = GER location = 1 soft_attack = 30 hard_attack = 0 defense = 10 max_strength = 100 }
+        create_division = { owner = FRA location = 2 soft_attack = 0 hard_attack = 0 defense = 10 max_strength = 100 }
+        create_province = { id = 1 owner = GER neighbors = { 2 } }
+        create_province = { id = 2 owner = FRA neighbors = { 1 } }
+        start_battle = { attacker = GER defender = FRA province = 2 }
+    "#;
+    interp.run(&lower_effects(&parse(battle_setup).unwrap()), &mut w);
+
+    // 记录 FRA 师 HP, 结算 1 小时
+    let fra_id = w.divisions_of("FRA")[0];
+    let hp_before = w.divisions.get(&fra_id).unwrap().strength;
+    GameClock::advance(&interp, &mut w, 1);
+    let hp_after = w.divisions.get(&fra_id).unwrap().strength;
+    let loss = hp_before - hp_after;
+    // +100% soft_attack → 攻击翻倍 → 伤害应明显(>0)
+    assert!(loss > 0.0, "modifier 生效后应有伤害, 实际 loss={loss}");
+
+    // 对照: 无 modifier 时同样配置的伤害(应小于有 modifier)
+    let mut w2 = World::new();
+    let mut reg2 = Registry::new();
+    register_all(&mut reg2);
+    let interp2 = Interpreter::new(reg2);
+    interp2.run(&lower_effects(&parse(battle_setup).unwrap()), &mut w2);
+    let fra_id2 = w2.divisions_of("FRA")[0];
+    let hp_before2 = w2.divisions.get(&fra_id2).unwrap().strength;
+    GameClock::advance(&interp2, &mut w2, 1);
+    let loss2 = hp_before2 - w2.divisions.get(&fra_id2).unwrap().strength;
+    assert!(loss > loss2, "有 +100% modifier 的伤害应大于无 modifier: {loss} > {loss2}");
+}
+
+#[test]
+fn t_factor_suffix_parses_as_multiply() {
+    // soft_attack_factor 应解析为 Multiply(独立乘), soft_attack 应解析为 Add
+    use hoi4_clone::combat::modifier::{parse_modifier_token, ModifierOp};
+    let (_, op1) = parse_modifier_token("soft_attack").unwrap();
+    let (_, op2) = parse_modifier_token("soft_attack_factor").unwrap();
+    assert_eq!(op1, ModifierOp::Add);
+    assert_eq!(op2, ModifierOp::Multiply);
+}
+
+#[test]
+fn t_empty_modifiers_exact_same_as_before() {
+    // 空 ModifierStack 时 effective_soft_attack 应等于 面板×补给(无 modifier)
+    use hoi4_clone::runtime::Division;
+    use hoi4_clone::combat::modifier::ModifierStack;
+
+    let mut d = Division::default();
+    d.soft_attack = 30.0;
+    d.equipment_held.insert("x".into(), 100.0);
+    d.equipment_need.insert("x".into(), 100.0);
+    d.manpower_held = 1000.0;
+    d.manpower_need = 1000.0;
+
+    let empty = ModifierStack::new();
+    let with_mods = d.effective_soft_attack(&empty);
+    // 满编时 supply_ratio=1.0, 空 modifier multiplier=1.0 → 30.0
+    assert!((with_mods - 30.0).abs() < 1e-9, "空栈应精确还原: 30×1.0×1.0=30, 实际 {}", with_mods);
+}
