@@ -6,6 +6,7 @@
 
 pub mod equipment;
 pub mod loader;
+pub mod state_loader;
 pub mod subunit;
 pub mod template;
 
