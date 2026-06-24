@@ -2,6 +2,7 @@
 pub mod ast;
 pub mod combat;
 pub mod commands;
+pub mod data;
 pub mod parser;
 pub mod runtime;
 
