@@ -8,6 +8,7 @@
 use crate::data::equipment::{
     compute_equipment_stats, extract_stats, ChassisDef, EquipmentDef, ModuleDef, SlotDef,
 };
+use crate::data::subunit::{parse_sub_unit};
 use crate::data::GameData;
 use crate::parser::{Block, Value};
 use std::collections::HashMap;
@@ -226,6 +227,25 @@ fn has_own_stats(block: &Block) -> bool {
     })
 }
 
+/// 解析营定义文件(units/*.txt)
+/// 文件顶层是 sub_units = { 营名 = {...} ... }
+pub fn load_sub_units(data: &mut GameData, src: &str) {
+    let block = match crate::parser::parse(src) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("[data] 警告: 营文件解析失败: {:?}", e);
+            return;
+        }
+    };
+    let Some(su_block) = find_block(&block, "sub_units") else {
+        return;
+    };
+    for (name, entry) in named_entries(su_block) {
+        let su = parse_sub_unit(&name, &entry);
+        data.sub_units.insert(name, su);
+    }
+}
+
 // ===== Block 解读辅助(通用) =====
 
 /// 在 block 的 fields 里找 key 对应的子块
@@ -336,5 +356,38 @@ mod tests {
             .any(|k| k.starts_with("infantry_equipment_"));
         assert!(has_variant, "应解析出 infantry_equipment_* 型号, 实际装备: {:?}",
             data.equipment.keys().collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn t_load_sub_units_infantry() {
+        let src = "sub_units = {
+            infantry = {
+                group = infantry
+                combat_width = 2
+                max_strength = 25
+                manpower = 1000
+                need = { infantry_equipment_1 = 100 }
+            }
+        }";
+        let mut data = GameData::default();
+        load_sub_units(&mut data, src);
+        let su = data.sub_units.get("infantry").expect("应解析出 infantry 营");
+        assert_eq!(su.group, "infantry");
+        assert!((su.combat_width - 2.0).abs() < 1e-9);
+        assert!((su.max_strength - 25.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn t_load_real_units_infantry_file() {
+        let src = include_str!("../data_raw/units/infantry.txt");
+        let mut data = GameData::default();
+        load_sub_units(&mut data, src);
+        // 原版 units/infantry.txt 含 infantry 营
+        let su = data.sub_units.get("infantry");
+        assert!(su.is_some(), "应解析出 infantry 营");
+        if let Some(su) = su {
+            assert!((su.combat_width - 2.0).abs() < 1e-9);
+            assert!((su.max_strength - 25.0).abs() < 1e-9);
+        }
     }
 }

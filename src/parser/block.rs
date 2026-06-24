@@ -125,11 +125,20 @@ fn parse_block(cur: &mut Cursor, expect_rbrace: bool) -> Result<Block, ParseErro
                 let value = match cur.toks.get(cur.pos) {
                     Some(Token::LBrace) => {
                         cur.pos += 1;
-                        // peek 块内首个 token: Num/Str/Bool → 裸值列表; 否则 Block
-                        let is_list = matches!(
-                            cur.toks.get(cur.pos),
-                            Some(Token::Num(_)) | Some(Token::Str(_)) | Some(Token::Bool(_))
-                        );
+                        // peek 块内首个 token 判断是裸值列表还是命名块:
+                        // - Num/Str/Bool 开头 → 裸值列表(如 neighbors = { 2 3 })
+                        // - Ident 开头: lookahead 第二个 token
+                        //     非 = / 比较符 → 裸 ident 列表(如 type = { infantry support })
+                        //     否则 → 命名块(如 focus = { id = x })
+                        let is_list = match cur.toks.get(cur.pos) {
+                            Some(Token::Num(_)) | Some(Token::Str(_)) | Some(Token::Bool(_)) => true,
+                            Some(Token::Ident(_)) => !matches!(
+                                cur.toks.get(cur.pos + 1),
+                                Some(Token::Eq) | Some(Token::Ge) | Some(Token::Le)
+                                    | Some(Token::Gt) | Some(Token::Lt) | Some(Token::Ne)
+                            ),
+                            _ => false,
+                        };
                         if is_list {
                             Value::List(parse_list(cur)?)
                         } else {
