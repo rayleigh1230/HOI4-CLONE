@@ -1,7 +1,7 @@
 # hoi4-clone 项目交接文档
 
 > **用途**: 在新会话中继续开发。读本文件 + 列出的关键文件即可接上。
-> **更新**: 2026-06-23(多段路径行军 + 航点规划 + 支援攻击邻接收敛 + 路径失效应对)
+> **更新**: 2026-06-24(数据驱动引擎架构 — GameData 只读层 + 营→师汇总 + 模块化装备)
 
 ---
 
@@ -12,7 +12,7 @@
 - **位置**: `G:\projects\hoi4-clone\`
 - **运行**: `cargo test`(测试) / `cargo run --bin hoi4_demo`(CLI) / 浏览器 `http://127.0.0.1:8765`(UI demo)
 - **工具链**: `stable-x86_64-pc-windows-gnu`(rustup override 绑定)
-- **规模**: ~5700 行 Rust + UI, **118 测试**, 316KB WASM
+- **规模**: ~7000 行 Rust + UI + 原版数据, **147 测试**
 
 ---
 
@@ -27,7 +27,40 @@
 | 陆战循环 | 四量模型+撤退+歼灭+行军+包围+宽度+预备队+带溃 | 73 | (分支) |
 | 多战场+指令 | 多战场伤害累积+支援攻击+停止+防守撤退+预备队时机 | 99 | (阶段) |
 | 状态机重构 | OrderState enum 替代 7 扁平字段 + 4 条规则对齐 + 瞬移根治 | 101 | (阶段) |
-| **多段路径行军** | **自动寻路 + 航点规划 + 支援攻击邻接收敛 + 路径失效应对 + UI 路径可视化 + 10省对垒地图** | **118** | **(本阶段)** |
+| 多段路径行军 | 自动寻路 + 航点规划 + 支援攻击邻接收敛 + 路径失效应对 + UI 路径可视化 + 10省对垒地图 | 118 | (阶段) |
+| **数据驱动引擎** | **GameData 只读层 + 模块化装备(底盘+模块) + 营→师汇总公式 + 原版数据文件加载** | **147** | **(本阶段)** |
+
+### 本阶段核心改动: 数据驱动引擎架构(2026-06-24)
+
+**核心转变**: 师从"硬编码 create_division"变成"由模板+营+装备数据汇总计算"。引入只读静态定义数据库 `GameData`, 让引擎读原版数据文件。
+
+**新增 `src/data/` 层**(parser 的第二个消费者, 与 runtime 平行):
+- `mod.rs` — GameData 结构 + EquipStats(add/multiply 汇总公式) + OnceLock 进程级缓存
+- `equipment.rs` — ChassisDef/ModuleDef/EquipmentDef/SlotDef + compute_equipment_stats(加法后乘法)
+- `subunit.rs` — SubUnitDef + combat_stats(营属性=need装备×件数/100) + battalion_mult
+- `template.rs` — DivisionTemplate + to_division_stats(营→师汇总: 求和/加权混合60-40/按width加权)
+- `loader.rs` — load_all 统一入口 + 两遍扫描解继承 + 装备别名注册
+
+**统一装备模型**: 所有装备 = 底盘 + 模块组合。整件装备(步兵)是 slots 为空的底盘; 模块化装备(坦克)有槽位。历史预置型号和玩家自建设计走同一汇总公式。
+
+**数据来源**: 原版文件编译期嵌入 `src/data_raw/`(include_str!), 拷贝精简子集(步兵/炮/坦克装备+模块+营+德国OOB模板)。
+
+**改造点**:
+- World 加 `data: Arc<GameData>`(new() 经 cached_game_data() 自动加载, 现有测试零改动)
+- create_division 加 `template` 参数(数据驱动汇总); 旧 `battalions`/手填路径隔离保留
+
+**附带 parser 改进**(修真实数据加载的语法差异):
+- lexer 跳过 UTF-8 BOM
+- 非法数字(日期 1939.1.1)回退为字符串 token
+- ident 字符集含 `:`(命名空间限定 mio:GER_xxx)
+- parser lookahead: 块内 Ident 后非=/比较符 → 裸 ident 列表(type={infantry})
+
+**营→师汇总公式**(对齐 docs/formulas/land-combat.md 第2节):
+- 求和类(攻防突宽HP人力): Σ
+- 加权混合60-40(装甲/穿甲)
+- 按 combat_width 加权(硬度/org)
+
+**验证**: 7步师 soft=21 defense=140 hp=175(与原版注释一致); 装甲加权混合(1步+1甲50→35); 真实德国OOB模板建师属性非零。
 
 ### 本阶段核心改动: 多段路径行军(2026-06-23)
 
@@ -123,14 +156,22 @@ enum OrderState {
 
 ```
 src/
-├── parser/       lexer + block(脚本→AST树) + List(裸值列表)
+├── parser/       lexer(含BOM跳过/日期容错/冒号ident/裸ident列表lookahead)
+│                 + block(脚本→Block树) + List(裸值列表)
 ├── ast/          effect/trigger/lower(Block→Effect/Trigger)
+├── data/         ★数据驱动层(parser的第二个消费者, 与runtime平行)
+│   ├── mod.rs        GameData(只读数据库) + EquipStats(add/multiply) + OnceLock缓存
+│   ├── equipment.rs  ChassisDef/ModuleDef/EquipmentDef/SlotDef + compute_equipment_stats
+│   ├── subunit.rs    SubUnitDef + combat_stats(营=need装备×件数/100) + battalion_mult
+│   ├── template.rs   DivisionTemplate + to_division_stats(营→师汇总公式)
+│   └── loader.rs     load_all统一入口 + 两遍扫描解继承 + 装备别名注册
+├── data_raw/     ★原版数据文件拷贝(编译期include_str!嵌入)
 ├── runtime/
 │   ├── entities.rs   Province/Country/Division/Battle/Scope + OrderState enum
 │   │                 Division.order: OrderState(替代旧 7 扁平字段)
 │   │                 派生方法: is_moving/is_withdrawing/is_pending/is_idle/
 │   │                 move_dest/retreat_dest/pending_dest/move_origin/move_progress
-│   ├── world.rs      World状态 + scope_stack + 实体管理 + started标志
+│   ├── world.rs      World状态 + data:Arc<GameData> + scope_stack + 实体管理 + started标志
 │   ├── interp.rs     Interpreter(run/eval + run_for_each作用域枚举)
 │   ├── registry.rs   Registry(effects/triggers) + ParamGet
 │   ├── clock.rs      GameClock::tick(主循环)
@@ -144,9 +185,9 @@ src/
 │   ├── width.rs      战斗宽度 + reinforce_reserves(预备队补位2%/h)
 │   ├── recovery.rs   组织度恢复(读 OrderState, Moving敌方掉/Retreating恢复/Idle恢复)
 │   ├── reinforce.rs  装备+人力增援(每日, 排除 Moving/Retreating)
-│   ├── commands.rs   create_division/start_battle/move_division(含邻接检查)/
-│   │                 support_attack/stop_order + join_as_attacker(共用)
-│   └── equipment_data.rs  5种1936装备真实数值
+│   ├── commands.rs   create_division(template/battalions/手填三路径)/start_battle/
+│   │                 move_division/support_attack/stop_order + join_as_attacker
+│   └── equipment_data.rs  5种1936装备硬编码表(旧路径用, 数据驱动路径不碰)
 ├── commands/     vars/control/scope命令注册
 ├── wasm_api.rs   WASM桥接(序列化时 OrderState 拍平为原 6 JSON 键, JS 零改动)
 └── lib.rs / main.rs

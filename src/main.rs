@@ -71,13 +71,20 @@ fn main() {
     }
 
     println!("\n=== 结论 ===");
-    let ger = world.divisions.values().find(|d| d.owner_tag == "GER").unwrap();
-    let fra = world.divisions.values().find(|d| d.owner_tag == "FRA").unwrap();
-    println!("GER 装备充足度: {:.0}% (仓库补给中)", ger.equipment_ratio() * 100.0);
-    println!("FRA 装备充足度: {:.0}% (仓库耗尽, 难补充)", fra.equipment_ratio() * 100.0);
-    if fra.equipment_ratio() < ger.equipment_ratio() {
-        println!("✓ FRA 仓库少, 装备补充慢, 战力衰减更严重 — 装备战联动生效");
-    } else {
-        println!("⚠ 装备差异不明显, 需检查");
+    let ger = world.divisions.values().find(|d| d.owner_tag == "GER");
+    let fra = world.divisions.values().find(|d| d.owner_tag == "FRA");
+    match (ger, fra) {
+        (Some(ger), Some(fra)) => {
+            println!("GER 装备充足度: {:.0}% (仓库补给中)", ger.equipment_ratio() * 100.0);
+            println!("FRA 装备充足度: {:.0}% (仓库耗尽, 难补充)", fra.equipment_ratio() * 100.0);
+            if fra.equipment_ratio() < ger.equipment_ratio() {
+                println!("✓ FRA 仓库少, 装备补充慢, 战力衰减更严重 — 装备战联动生效");
+            } else {
+                println!("⚠ 装备差异不明显, 需检查");
+            }
+        }
+        (Some(_), None) => println!("FRA 师已被消灭/撤退 — GER 获胜"),
+        (None, Some(_)) => println!("GER 师已被消灭/撤退 — FRA 获胜"),
+        (None, None) => println!("双方师均已退出战斗"),
     }
 }
