@@ -5,7 +5,10 @@
 //! GameData 启动加载一次, 运行时只读不改。
 
 pub mod equipment;
+pub mod loader;
 
+use crate::data::equipment::{ChassisDef, EquipmentDef, ModuleDef};
+// (后续 Task 6/8 加 SubUnitDef/DivisionTemplate 的 use)
 use std::collections::HashMap;
 
 /// 装备属性集合(战斗相关字段, 从 add_stats/multiply_stats 提取)
@@ -56,12 +59,11 @@ impl EquipStats {
 }
 
 /// 只读静态定义数据库(启动加载, 运行时不改)
-/// 子模块结构在后续 Task 定义; 这里先用占位 HashMap
 #[derive(Debug, Clone, Default)]
 pub struct GameData {
-    pub equipment: HashMap<String, ()>,   // 占位, Task 5 换成 EquipmentDef
-    pub sub_units: HashMap<String, ()>,   // 占位, Task 7 换成 SubUnitDef
-    pub templates: HashMap<String, ()>,   // 占位, Task 10 换成 DivisionTemplate
+    pub modules: HashMap<String, ModuleDef>,
+    pub chassis: HashMap<String, ChassisDef>,
+    pub equipment: HashMap<String, EquipmentDef>,   // 可生产装备
     pub start_year: u32,
 }
 
