@@ -1,7 +1,7 @@
 # hoi4-clone 项目交接文档
 
 > **用途**: 在新会话中继续开发。读本文件 + 列出的关键文件即可接上。
-> **更新**: 2026-06-24(数据驱动引擎架构 — GameData 只读层 + 营→师汇总 + 模块化装备)
+> **更新**: 2026-06-24(modifier 层 — 陆战结算统一修正接口 + _factor后缀推导op)
 
 ---
 
@@ -12,7 +12,7 @@
 - **位置**: `G:\projects\hoi4-clone\`
 - **运行**: `cargo test`(测试) / `cargo run --bin hoi4_demo`(CLI) / 浏览器 `http://127.0.0.1:8765`(UI demo)
 - **工具链**: `stable-x86_64-pc-windows-gnu`(rustup override 绑定)
-- **规模**: ~7000 行 Rust + UI + 原版数据, **147 测试**
+- **规模**: ~7300 行 Rust + UI + 原版数据, **164 测试**
 
 ---
 
@@ -27,8 +27,39 @@
 | 陆战循环 | 四量模型+撤退+歼灭+行军+包围+宽度+预备队+带溃 | 73 | (分支) |
 | 多战场+指令 | 多战场伤害累积+支援攻击+停止+防守撤退+预备队时机 | 99 | (阶段) |
 | 状态机重构 | OrderState enum 替代 7 扁平字段 + 4 条规则对齐 + 瞬移根治 | 101 | (阶段) |
-| 多段路径行军 | 自动寻路 + 航点规划 + 支援攻击邻接收敛 + 路径失效应对 + UI 路径可视化 + 10省对垒地图 | 118 | (阶段) |
-| **数据驱动引擎** | **GameData 只读层 + 模块化装备(底盘+模块) + 营→师汇总公式 + 原版数据文件加载** | **147** | **(本阶段)** |
+| 多段路径行军 | 自动寻路 + 航点规划 + 支援攻击邻接收敛 + 路径失效应对 | 118 | (阶段) |
+| 数据驱动引擎 | GameData 只读层 + 模块化装备 + 营→师汇总 + 原版数据加载 | 147 | (阶段) |
+| **modifier 层** | **陆战结算统一修正接口(CombatContext快照 + _factor推导op + 三结算点口子)** | **164** | **(本阶段)** |
+
+### 本阶段核心改动: modifier 层(2026-06-24)
+
+**核心承诺兑现**: 后续加科技/国策/将领/堑壕/地形/昼夜系统时, **不改 resolve.rs / effective_* / width.rs / recovery.rs**——只往 ModifierStack push 数据。
+
+**新增 `src/combat/modifier.rs`**:
+- `Modifier`/`ModifierStat`/`ModifierOp`/`ModifierStack`(数据模型)
+- `parse_modifier_token`: 属性名后缀推导 op(对齐原版 — `_factor`=Multiply, 无后缀=Add)
+- `CombatContext`: 结算前快照, 汇总 国家+省份+师 三层 modifier(避借用冲突)
+- `terrain_modifiers`: 占位(返回空栈, 后续地形系统填)
+
+**叠加公式**: `(1+ΣAdd) × Π(1+Multiply)`
+- Add 类(科技/精神/将领, 无后缀属性): 同类相加
+- Multiply 类(地形/战术/堑壕/计划, `_factor` 后缀): 异层相乘
+- 负向修正几乎全是 Multiply → 逐个相乘永不负(避溢出)
+
+**三个结算口子**:
+- 战斗属性: `effective_*(mods)` × modifier(soft/hard/defense/breakthrough/armor/piercing)
+- 战斗宽度: `can_join_frontline(..., mods)` 上限 = 70 × CombatWidth multiplier
+- org 恢复: `recovery × OrgRegain multiplier`
+
+**实体接入**: Division/Country 各加 `modifiers: ModifierStack` 字段; resolve_all_battles 构造 CombatContext 传给结算。
+
+**命令接口**: `add_country_modifier`/`add_division_modifier`(stat 用原版属性名, op 自动推导)
+
+**快照支持动态 modifier**: CombatContext 结算前冻结当前小时的 darkness 等, 昼夜/天气后续接入只往省份层 push, 不改结算(spec §3.4)。
+
+**零破坏保证**: 空 ModifierStack multiplier=1.0, effective_* 数值与改造前逐位相同, 现有测试零回归。
+
+**设计原则沉淀**: `docs/design-principles.md`(原版设计是首要参考对象 + modifier双模式教训)。
 
 ### 本阶段核心改动: 数据驱动引擎架构(2026-06-24)
 
@@ -177,8 +208,9 @@ src/
 │   ├── clock.rs      GameClock::tick(主循环)
 │   └── error.rs      CmdError
 ├── combat/
+│   ├── modifier.rs   ★陆战结算统一修正接口(Modifier/ModifierStack/CombatContext + _factor推导op)
 │   ├── resolve.rs    陆战结算(骰子/防御池/装甲) + cleanup(撤退/歼灭/带溃/占地)
-│   │                 多战场伤害 delta 累积; 攻方战败区分(归属地己方→Idle/丢→Retreating)
+│   │                 注入 CombatContext; atk_stats/pool_value 接 mods
 │   ├── movement.rs   check_engagements(过滤 Retreating) + cancel_finished_supports
 │   │                 + advance_movement(进度推进+到达判定, 规则3: 自身在战场不结算归属)
 │   │                 到达分支: Moving→Capture/Pending; Retreating→Capture/RetreatIntoEnemy
