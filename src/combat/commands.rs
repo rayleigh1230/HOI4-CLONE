@@ -45,6 +45,7 @@ fn build_division_from_stats(owner: &str, loc: u32, stats: DivisionStats) -> Div
         manpower_need: stats.manpower_need,
         manpower_held: stats.manpower_need,
         order: OrderState::Idle,
+        modifiers: Default::default(),
     }
 }
 
@@ -212,6 +213,7 @@ pub fn register(reg: &mut Registry) {
             manpower_need: mp_total,
             manpower_held: mp_total,
             order: OrderState::Idle,
+            modifiers: Default::default(),
         };
         w.add_division(d);
         Ok(())

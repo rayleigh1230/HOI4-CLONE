@@ -18,6 +18,8 @@ pub struct Country {
     pub equipment_stockpile: std::collections::HashMap<String, f64>,
     /// 人力池(陆战循环): 国家征召的兵员储备
     pub manpower_pool: f64,
+    /// modifier 汇总(科技/精神/ideas 等国家级修正)
+    pub modifiers: crate::combat::modifier::ModifierStack,
 }
 
 /// 行动状态机(替代原 7 个扁平字段 retreating/destination/move_progress/attacking/
@@ -72,6 +74,8 @@ pub struct Division {
     pub manpower_held: f64,
     /// 行动状态机(替代原 7 个扁平字段)
     pub order: OrderState,
+    /// modifier 汇总(堑壕/计划/经验等师自身修正)
+    pub modifiers: crate::combat::modifier::ModifierStack,
 }
 
 impl Division {
@@ -186,18 +190,22 @@ impl Division {
             1.0
         }
     }
-    // 有效属性 = 面板值 × 综合补给充足度
-    pub fn effective_soft_attack(&self) -> f64 {
+    // 有效属性 = 面板值 × 综合补给充足度 × modifier
+    pub fn effective_soft_attack(&self, mods: &crate::combat::modifier::ModifierStack) -> f64 {
         self.soft_attack * self.supply_ratio()
+            * mods.multiplier(crate::combat::modifier::ModifierStat::SoftAttack)
     }
-    pub fn effective_hard_attack(&self) -> f64 {
+    pub fn effective_hard_attack(&self, mods: &crate::combat::modifier::ModifierStack) -> f64 {
         self.hard_attack * self.supply_ratio()
+            * mods.multiplier(crate::combat::modifier::ModifierStat::HardAttack)
     }
-    pub fn effective_defense(&self) -> f64 {
+    pub fn effective_defense(&self, mods: &crate::combat::modifier::ModifierStack) -> f64 {
         self.defense * self.equipment_ratio()
+            * mods.multiplier(crate::combat::modifier::ModifierStat::Defense)
     }
-    pub fn effective_breakthrough(&self) -> f64 {
+    pub fn effective_breakthrough(&self, mods: &crate::combat::modifier::ModifierStack) -> f64 {
         self.breakthrough * self.equipment_ratio()
+            * mods.multiplier(crate::combat::modifier::ModifierStat::Breakthrough)
     }
 }
 

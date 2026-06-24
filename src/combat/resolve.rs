@@ -1,7 +1,7 @@
 //! 陆战结算(公式见 docs/formulas/land-combat.md)
 //!
 //! 安全借用策略: 攻方属性拷贝成只读 AtkStats, 守方可变借用写伤害。避免 unsafe。
-use crate::runtime::entities::{Division, OrderState};
+use crate::runtime::entities::{Battle, Division, OrderState};
 use crate::runtime::World;
 
 /// 全局系数(对应 NMilitary defines, 见 docs/formulas/land-combat.md)
@@ -26,26 +26,35 @@ struct AtkStats {
 }
 
 impl AtkStats {
-    fn from(d: &Division) -> Self {
-        // M4a: 攻击属性按装备充足度缩放(缺装备→攻击下降)
+    fn from(d: &Division, mods: &crate::combat::modifier::ModifierStack) -> Self {
+        use crate::combat::modifier::ModifierStat;
+        // M4a: 攻击属性按装备充足度缩放(缺装备→攻击下降) × modifier
         Self {
-            soft_attack: d.effective_soft_attack(),
-            hard_attack: d.effective_hard_attack(),
-            armor: d.armor,
-            piercing: d.piercing,
+            soft_attack: d.effective_soft_attack(mods),
+            hard_attack: d.effective_hard_attack(mods),
+            armor: d.armor * mods.multiplier(ModifierStat::Armor),
+            piercing: d.piercing * mods.multiplier(ModifierStat::Piercing),
         }
     }
 }
 
 /// 对一组攻击者 vs 一组防御者结算 1 小时(仅正向; 反击由 resolve_all_battles 对称处理)
 /// 守方为可变引用切片, 兼容 HashMap::get_mut 收集的 Vec<&mut Division>
-pub fn resolve_hour(attackers: &[Division], defenders: &mut [&mut Division]) {
+/// mods 从 ctx 按 division_id 取
+pub fn resolve_hour(
+    attackers: &[Division],
+    defenders: &mut [&mut Division],
+    ctx: &crate::combat::modifier::CombatContext,
+) {
     if attackers.is_empty() || defenders.is_empty() {
         return;
     }
+    // 先用 id 收集 mods(不借 defenders 本身, 避免后续可变借用冲突)
+    let atk_stats: Vec<AtkStats> = attackers.iter().map(|d| AtkStats::from(d, ctx.get(d.id))).collect();
+    let def_mods: Vec<&crate::combat::modifier::ModifierStack> =
+        defenders.iter().map(|d| ctx.get(d.id)).collect();
     // 正向: 攻方 → 守方(守方用 defense 池; P1-5 所有攻击者共享消耗)
-    let atk_stats: Vec<AtkStats> = attackers.iter().map(AtkStats::from).collect();
-    apply_all_attackers(&atk_stats, defenders, CombatPool::Defense);
+    apply_all_attackers(&atk_stats, defenders, CombatPool::Defense, &def_mods);
 }
 
 /// 哪一方的防御池: 守方用 defense, 攻方(被反击时)用 breakthrough
@@ -56,20 +65,26 @@ enum CombatPool {
 }
 
 impl CombatPool {
-    fn pool_value(self, d: &Division) -> f64 {
-        // M4a: 防御池也按装备充足度缩放
+    fn pool_value(self, d: &Division, mods: &crate::combat::modifier::ModifierStack) -> f64 {
+        // M4a: 防御池也按装备充足度缩放 × modifier
         match self {
-            CombatPool::Defense => d.effective_defense(),
-            CombatPool::Breakthrough => d.effective_breakthrough(),
+            CombatPool::Defense => d.effective_defense(mods),
+            CombatPool::Breakthrough => d.effective_breakthrough(mods),
         }
     }
 }
 
 /// 所有攻击方对一组目标输出伤害(P1-5: 防御池对所有攻击者共享消耗)
 /// 每个目标的 defense/breakthrough 池被所有攻击者的攻击累加消耗。
-fn apply_all_attackers(attackers: &[AtkStats], targets: &mut [&mut Division], pool: CombatPool) {
+/// targets_mods 与 targets 一一对应(每个目标的 modifier 汇总)。
+fn apply_all_attackers(
+    attackers: &[AtkStats],
+    targets: &mut [&mut Division],
+    pool: CombatPool,
+    targets_mods: &[&crate::combat::modifier::ModifierStack],
+) {
     let n = targets.len();
-    if n == 0 || attackers.is_empty() {
+    if n == 0 || attackers.is_empty() || targets_mods.len() != n {
         return;
     }
     let target_hardness = targets[0].hardness;
@@ -96,8 +111,8 @@ fn apply_all_attackers(attackers: &[AtkStats], targets: &mut [&mut Division], po
             continue;
         }
 
-        // P1-5: 用目标防御池一次判定总命中(所有攻击共享消耗)
-        let total_hits = compute_hits(total_attacks, pool.pool_value(tgt));
+        // P1-5: 用目标防御池一次判定总命中(传入该 target 的 mods)
+        let total_hits = compute_hits(total_attacks, pool.pool_value(tgt, targets_mods[i]));
 
         // 按攻击点比例把命中分给各攻击者, 各自算伤害(含装甲碾压骰子)
         for (atk_pts, armor_outclass, def_outclass) in per_atk {
@@ -165,10 +180,11 @@ fn consume_losses(div: &mut Division, hp_loss: f64) {
 ///         ③ 按 id 累积伤害 delta 写回(同一师参与多场战斗, 伤害累加而非覆盖 → 修 P1-6)。
 /// 安全借用: 每场战斗本地克隆师副本, 算 (before-after) delta, 最后一次性写回 world。无 unsafe。
 pub fn resolve_all_battles(world: &mut World) {
-    let battle_specs: Vec<(Vec<u64>, Vec<u64>)> = world
+    // battle_specs 含 province(供 CombatContext::build 取省份层 modifier)
+    let battle_specs: Vec<(u32, Vec<u64>, Vec<u64>)> = world
         .battles
         .iter()
-        .map(|b| (b.attackers.clone(), b.defenders.clone()))
+        .map(|b| (b.province, b.attackers.clone(), b.defenders.clone()))
         .collect();
 
     // P1-6 修复: 累积每个师的伤害 delta(同一师可能在多场战斗, 伤害应相加而非覆盖)
@@ -184,7 +200,7 @@ pub fn resolve_all_battles(world: &mut World) {
     }
     let mut deltas: HashMap<u64, DamageDelta> = HashMap::new();
 
-    for (atk_ids, def_ids) in &battle_specs {
+    for (province, atk_ids, def_ids) in &battle_specs {
         // before 快照(算本场 delta 用)
         let atk_before: HashMap<u64, Division> =
             atk_ids.iter().filter_map(|id| world.divisions.get(id).map(|d| (*id, d.clone()))).collect();
@@ -199,17 +215,29 @@ pub fn resolve_all_battles(world: &mut World) {
             continue;
         }
 
+        // 构造 CombatContext(用临时 Battle 快照, 仅需 province + 双方 id)
+        let battle_snapshot = Battle {
+            id: 0, province: *province,
+            attackers: atk_ids.clone(), defenders: def_ids.clone(),
+            reserve_attackers: vec![], reserve_defenders: vec![],
+        };
+        let ctx = crate::combat::modifier::CombatContext::build(world, &battle_snapshot);
+
         // 正向: 攻 → 守(守用 defense 池; P1-5 所有攻击者共享消耗)
         {
-            let atk_stats: Vec<AtkStats> = atks.iter().map(AtkStats::from).collect();
+            let atk_stats: Vec<AtkStats> = atks.iter().map(|d| AtkStats::from(d, ctx.get(d.id))).collect();
+            let def_mods: Vec<&crate::combat::modifier::ModifierStack> =
+                defs.iter().map(|d| ctx.get(d.id)).collect();
             let mut def_refs: Vec<&mut Division> = defs.iter_mut().collect();
-            apply_all_attackers(&atk_stats, &mut def_refs, CombatPool::Defense);
+            apply_all_attackers(&atk_stats, &mut def_refs, CombatPool::Defense, &def_mods);
         }
         // 反向(反击): 守 → 攻(攻用 breakthrough 池)
         {
-            let def_stats: Vec<AtkStats> = defs.iter().map(AtkStats::from).collect();
+            let def_stats: Vec<AtkStats> = defs.iter().map(|d| AtkStats::from(d, ctx.get(d.id))).collect();
+            let atk_mods: Vec<&crate::combat::modifier::ModifierStack> =
+                atks.iter().map(|d| ctx.get(d.id)).collect();
             let mut atk_refs: Vec<&mut Division> = atks.iter_mut().collect();
-            apply_all_attackers(&def_stats, &mut atk_refs, CombatPool::Breakthrough);
+            apply_all_attackers(&def_stats, &mut atk_refs, CombatPool::Breakthrough, &atk_mods);
         }
 
         // 累积本场 delta 到 deltas(而非覆盖 final_state)
@@ -467,7 +495,8 @@ mod tests {
         let mut d = inf("DEF");
         let org_before = d.org;
         let mut defs = [&mut d];
-        resolve_hour(&atks, &mut defs);
+        let ctx = crate::combat::modifier::CombatContext::empty();
+        resolve_hour(&atks, &mut defs, &ctx);
         assert!(d.org < org_before, "守方组织度应下降");
         assert!(d.org >= 0.0);
     }
@@ -482,7 +511,8 @@ mod tests {
         let mut d = inf("DEF"); // piercing=5 < armor=50
         let org_before = d.org;
         let mut defs = [&mut d];
-        resolve_hour(&[armor], &mut defs);
+        let ctx = crate::combat::modifier::CombatContext::empty();
+        resolve_hour(&[armor], &mut defs, &ctx);
         assert!(d.org < org_before, "装甲碾压应造成伤害");
         assert!(org_before - d.org > 1.0, "装甲碾压伤害应显著, 实际 {}", org_before - d.org);
     }
@@ -500,8 +530,9 @@ mod tests {
         let high_before = high.org;
         let mut low_defs = [&mut low];
         let mut high_defs = [&mut high];
-        resolve_hour(&atks, &mut low_defs);
-        resolve_hour(&atks2, &mut high_defs);
+        let ctx = crate::combat::modifier::CombatContext::empty();
+        resolve_hour(&atks, &mut low_defs, &ctx);
+        resolve_hour(&atks2, &mut high_defs, &ctx);
         let low_drop = low_before - low.org;
         let high_drop = high_before - high.org;
         assert!(
@@ -526,8 +557,13 @@ mod tests {
         let atk1 = inf("ATK");
         let atk2 = inf("ATK");
         let mut defs_d = [&mut def_double];
-        // 两个攻击者同时打(聚合)
-        apply_all_attackers(&[AtkStats::from(&atk1), AtkStats::from(&atk2)], &mut defs_d, CombatPool::Defense);
+        // 两个攻击者同时打(聚合)。targets_mods 按目标数(1个目标, 1个 mods)
+        let empty = crate::combat::modifier::ModifierStack::empty_static();
+        let mods_d = [empty]; // 1 个目标 → 1 个 mods
+        apply_all_attackers(
+            &[AtkStats::from(&atk1, empty), AtkStats::from(&atk2, empty)],
+            &mut defs_d, CombatPool::Defense, &mods_d,
+        );
         let drop_double = org_before_double - def_double.org;
 
         // 单攻击者对照
@@ -535,7 +571,9 @@ mod tests {
         def_single.defense = 50.0;
         let org_before_single = def_single.org;
         let mut defs_s = [&mut def_single];
-        apply_all_attackers(&[AtkStats::from(&atk1)], &mut defs_s, CombatPool::Defense);
+        let empty2 = crate::combat::modifier::ModifierStack::empty_static();
+        let mods_s = [empty2];
+        apply_all_attackers(&[AtkStats::from(&atk1, empty2)], &mut defs_s, CombatPool::Defense, &mods_s);
         let drop_single = org_before_single - def_single.org;
 
         // 双攻击者伤害应显著大于单攻击者(因为防御池被打穿, 更多 40% 命中)
