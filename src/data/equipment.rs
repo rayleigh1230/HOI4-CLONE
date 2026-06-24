@@ -6,6 +6,7 @@
 
 use crate::data::EquipStats;
 use crate::parser::Block;
+use std::collections::HashMap;
 
 /// 从一个 Block 提取装备属性字段(soft_attack/defense/armor_value 等)成 EquipStats
 /// 用于: 底盘基础属性、模块 add_stats、模块 multiply_stats
@@ -39,6 +40,62 @@ pub fn extract_stats(block: &Block) -> EquipStats {
         }
     }
     s
+}
+
+/// 底盘定义(archetype): 槽位结构 + 默认模块
+/// 整件装备(步兵/炮)的 slots 为空; 模块化装备(坦克)有槽位
+#[derive(Debug, Clone)]
+pub struct ChassisDef {
+    pub name: String,              // "light_tank_chassis" / "infantry_equipment"
+    pub equip_type: String,        // "armor" / "infantry" / "artillery"
+    pub year: u32,
+    pub is_archetype: bool,        // archetype 不可生产
+    pub base_stats: EquipStats,    // 底盘自带基础属性
+    pub slots: Vec<SlotDef>,       // 槽位定义(整件装备为空)
+    pub default_modules: HashMap<String, String>, // slot_name → module_name(预设组合)
+}
+
+#[derive(Debug, Clone)]
+pub struct SlotDef {
+    pub name: String,                        // "turret_type_slot"
+    pub required: bool,
+    pub allowed_categories: Vec<String>,     // ["tank_light_turret_type"]
+}
+
+/// 模块定义(原版 00_tank_modules.txt 里的每个条目)
+#[derive(Debug, Clone)]
+pub struct ModuleDef {
+    pub name: String,            // "tank_welded_armor"
+    pub category: String,        // "tank_armor_type"
+    pub add_stats: EquipStats,
+    pub multiply_stats: EquipStats,
+}
+
+/// 可生产装备(挂在营 need 里的名字)
+/// = 底盘 + 各槽位选定模块的汇总结果
+#[derive(Debug, Clone)]
+pub struct EquipmentDef {
+    pub name: String,              // "infantry_equipment_1"(archetype 型号名)
+    pub chassis: String,           // 指向 ChassisDef.name
+    pub year: u32,
+    pub equip_type: String,        // "armor" / "infantry" / "artillery"
+    pub stats: EquipStats,         // 最终属性(加载时按公式算好缓存)
+}
+
+/// 给定底盘基础 + 模块选择, 按公式算最终装备属性(spec §3.3)
+/// raw_stat = chassis_base + Σ module.add_stats
+/// final_stat = raw_stat × Π (1 + module.multiply_stats)
+pub fn compute_equipment_stats(chassis_base: &EquipStats, modules: &[ModuleDef]) -> EquipStats {
+    let mut stats = chassis_base.clone();
+    // 第1步: 加法汇总
+    for m in modules {
+        stats.add(&m.add_stats);
+    }
+    // 第2步: 乘法修正
+    for m in modules {
+        stats.multiply(&m.multiply_stats);
+    }
+    stats
 }
 
 #[cfg(test)]
@@ -77,5 +134,63 @@ mod tests {
         let b = parse(src).unwrap();
         let s = extract_stats(&b);
         assert!((s.soft_attack - 3.0).abs() < 1e-9);
+    }
+
+    use super::*;
+
+    #[test]
+    fn t_compute_stats_pure_base() {
+        // 无模块: final = base
+        let base = EquipStats { soft_attack: 3.0, defense: 20.0, ..Default::default() };
+        let s = compute_equipment_stats(&base, &[]);
+        assert!((s.soft_attack - 3.0).abs() < 1e-9);
+        assert!((s.defense - 20.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn t_compute_stats_add_only() {
+        // base + add: soft 10 + 5 = 15
+        let base = EquipStats { soft_attack: 10.0, ..Default::default() };
+        let modules = vec![ModuleDef {
+            name: "gun".into(), category: "x".into(),
+            add_stats: EquipStats { soft_attack: 5.0, ..Default::default() },
+            multiply_stats: EquipStats::default(),
+        }];
+        let s = compute_equipment_stats(&base, &modules);
+        assert!((s.soft_attack - 15.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn t_compute_stats_add_then_multiply() {
+        // spec §3.3 例: base armor 10, welded_armor multiply +0.3, turret multiply +0.1
+        // = 10 × 1.3 × 1.1 = 14.3
+        let base = EquipStats { armor: 10.0, ..Default::default() };
+        let modules = vec![
+            ModuleDef {
+                name: "welded".into(), category: "tank_armor_type".into(),
+                add_stats: EquipStats::default(),
+                multiply_stats: EquipStats { armor: 0.3, ..Default::default() },
+            },
+            ModuleDef {
+                name: "turret".into(), category: "tank_light_turret_type".into(),
+                add_stats: EquipStats::default(),
+                multiply_stats: EquipStats { armor: 0.1, ..Default::default() },
+            },
+        ];
+        let s = compute_equipment_stats(&base, &modules);
+        assert!((s.armor - 14.3).abs() < 1e-9, "装甲汇总应 14.3, 实际 {}", s.armor);
+    }
+
+    #[test]
+    fn t_chassis_default_modules_empty_for_integral() {
+        // 整件装备(步兵)无槽位
+        let c = ChassisDef {
+            name: "infantry_equipment".into(), equip_type: "infantry".into(),
+            year: 1936, is_archetype: true,
+            base_stats: EquipStats::default(),
+            slots: vec![], default_modules: HashMap::new(),
+        };
+        assert!(c.slots.is_empty());
+        assert!(c.default_modules.is_empty());
     }
 }
