@@ -72,6 +72,17 @@ pub struct GameData {
     pub start_year: u32,
 }
 
+use std::sync::OnceLock;
+
+/// 进程级 GameData 缓存(只加载一次, 所有 World 共享)
+/// OnceLock 是 std 稳定 API(1.70+), 零外部依赖
+static GAME_DATA: OnceLock<GameData> = OnceLock::new();
+
+/// 取共享只读 GameData(Arc 包裹)
+pub fn cached_game_data() -> std::sync::Arc<GameData> {
+    std::sync::Arc::new(GAME_DATA.get_or_init(|| crate::data::loader::load_all()).clone())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

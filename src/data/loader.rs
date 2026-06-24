@@ -9,6 +9,7 @@ use crate::data::equipment::{
     compute_equipment_stats, extract_stats, ChassisDef, EquipmentDef, ModuleDef, SlotDef,
 };
 use crate::data::subunit::{parse_sub_unit};
+use crate::data::template::{parse_template};
 use crate::data::GameData;
 use crate::parser::{Block, Value};
 use std::collections::HashMap;
@@ -246,6 +247,53 @@ pub fn load_sub_units(data: &mut GameData, src: &str) {
     }
 }
 
+/// 解析模板文件(history/countries/*.txt)
+/// 一个文件可含多个 division_template 块
+pub fn load_templates(data: &mut GameData, src: &str) {
+    let block = match crate::parser::parse(src) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("[data] 警告: 模板文件解析失败: {:?}", e);
+            return;
+        }
+    };
+    // 文件里可能有多个 division_template = {...}, 散布在顶层
+    for f in &block.fields {
+        if f.key == "division_template" {
+            if let Value::Block(tb) = &f.value {
+                let t = parse_template(tb);
+                if !t.name.is_empty() {
+                    data.templates.insert(t.name.clone(), t);
+                }
+            }
+        }
+    }
+}
+
+/// 统一加载入口: 按依赖链加载所有数据文件, 产出 GameData
+pub fn load_all() -> GameData {
+    let mut data = GameData::default();
+    data.start_year = 1936;
+
+    // 阶段1: 模块(无依赖)
+    load_modules(&mut data, include_str!("../data_raw/modules/00_tank_modules.txt"));
+
+    // 阶段2: 底盘(依赖模块) — 各装备文件
+    load_chassis(&mut data, include_str!("../data_raw/equipment/infantry.txt"));
+    load_chassis(&mut data, include_str!("../data_raw/equipment/artillery.txt"));
+    load_chassis(&mut data, include_str!("../data_raw/equipment/tank_chassis.txt"));
+
+    // 阶段3: 营定义(依赖装备)
+    load_sub_units(&mut data, include_str!("../data_raw/units/infantry.txt"));
+    load_sub_units(&mut data, include_str!("../data_raw/units/artillery.txt"));
+    load_sub_units(&mut data, include_str!("../data_raw/units/medium_armor.txt"));
+
+    // 阶段4: 模板(依赖营)
+    load_templates(&mut data, include_str!("../data_raw/history/GER.txt"));
+
+    data
+}
+
 // ===== Block 解读辅助(通用) =====
 
 /// 在 block 的 fields 里找 key 对应的子块
@@ -389,5 +437,40 @@ mod tests {
             assert!((su.combat_width - 2.0).abs() < 1e-9);
             assert!((su.max_strength - 25.0).abs() < 1e-9);
         }
+    }
+
+    #[test]
+    fn t_load_templates_from_block() {
+        let src = "division_template = {
+            name = \"7 Infantry\"
+            regiments = {
+                infantry = { x = 0 y = 0 }
+                infantry = { x = 1 y = 0 }
+            }
+        }
+        division_template = {
+            name = \"Armor\"
+            regiments = { medium_armor = { x = 0 y = 0 } }
+        }";
+        let mut data = GameData::default();
+        load_templates(&mut data, src);
+        assert!(data.templates.contains_key("7 Infantry"));
+        assert!(data.templates.contains_key("Armor"));
+    }
+
+    #[test]
+    fn t_load_all_produces_populated_data() {
+        // 端到端: load_all 应产出非空的 GameData
+        let data = crate::data::loader::load_all();
+        assert!(!data.chassis.is_empty(), "应加载出底盘");
+        assert!(!data.equipment.is_empty(), "应加载出装备");
+        assert!(!data.sub_units.is_empty(), "应加载出营");
+        // infantry_equipment 系列(可生产型号)必须存在(步兵营 need 它)
+        let has_inf_eq = data
+            .equipment
+            .keys()
+            .any(|k| k.starts_with("infantry_equipment_"));
+        assert!(has_inf_eq, "应存在 infantry_equipment_* 型号, 实际装备: {:?}",
+            data.equipment.keys().collect::<Vec<_>>());
     }
 }
