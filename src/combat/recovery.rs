@@ -48,7 +48,8 @@ pub fn recover_org(world: &mut World) {
             continue;
         }
         let hourly = div.max_org * DAILY_ORG_RECOVERY_RATE / 24.0;
-        let recovery = hourly * (0.5 + 0.5 * div.supply_ratio());
+        let org_mult = div.modifiers.multiplier(crate::combat::modifier::ModifierStat::OrgRegain);
+        let recovery = hourly * (0.5 + 0.5 * div.supply_ratio()) * org_mult;
         div.org = (div.org + recovery).min(div.max_org);
     }
 }
