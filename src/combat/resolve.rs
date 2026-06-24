@@ -400,8 +400,7 @@ fn cleanup_battles(world: &mut World) {
                 Some(d) => (d.location_province, d.owner_tag.clone()),
                 None => continue,
             };
-            let loc_friendly = world.provinces.get(&loc)
-                .map(|p| p.controller == owner).unwrap_or(false);
+            let loc_friendly = world.province_controller(loc).map(|c| c == owner).unwrap_or(false);
             if loc_friendly {
                 // 归属地仍己方 → 原地转 Idle(进攻失败, 回归属地)
                 if let Some(d) = world.divisions.get_mut(&id) {
@@ -445,12 +444,9 @@ fn cleanup_battles(world: &mut World) {
     for id in to_annihilate {
         world.divisions.remove(&id);
     }
-    // 占地: 攻方胜 → 占领战斗省份
+    // 占地: 攻方胜 → 占领战斗省份(只改 controller, 不改 owner; 通过 State)
     for (province, winner) in province_captures {
-        if let Some(p) = world.provinces.get_mut(&province) {
-            p.controller = winner.clone();
-            p.owner = winner;
-        }
+        world.set_state_controller(province, &winner);
     }
     // 应用战斗更新
     for (idx, atk, def) in battle_updates {
@@ -467,6 +463,19 @@ fn cleanup_battles(world: &mut World) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 测试辅助: 建省份 + 对应 State(归属从 State 派生)
+    /// state_id 用 省id*1000 避免与真实 State id 冲突
+    fn add_test_province(w: &mut World, id: u32, owner: &str, terrain: &str, neighbors: Vec<u32>) {
+        let sid = id * 1000;
+        w.states.insert(sid, crate::runtime::State {
+            id: sid, owner: owner.into(), controller: owner.into(),
+            ..Default::default()
+        });
+        w.provinces.insert(id, crate::runtime::Province {
+            id, state_id: sid, terrain: terrain.into(), neighbors,
+        });
+    }
 
     fn inf(owner: &str) -> Division {
         Division {
@@ -693,14 +702,8 @@ mod tests {
             ..Default::default()
         });
         // 省份地图: 省1=GER(出发地, 仍己方), 省2=FRA
-        w.provinces.insert(1, crate::runtime::Province {
-            id: 1, owner: "GER".into(), controller: "GER".into(),
-            terrain: "plains".into(), neighbors: vec![2],
-        });
-        w.provinces.insert(2, crate::runtime::Province {
-            id: 2, owner: "FRA".into(), controller: "FRA".into(),
-            terrain: "plains".into(), neighbors: vec![1],
-        });
+        add_test_province(&mut w, 1, "GER", "plains", vec![2]);
+        add_test_province(&mut w, 2, "FRA", "plains", vec![1]);
 
         resolve_all_battles(&mut w);
 
@@ -729,14 +732,9 @@ mod tests {
             ..Default::default()
         });
         // 省份: 省2=FRA(敌方, A 战败处), 省3=GER(省2 的邻省, 撤退目标)
-        w.provinces.insert(2, crate::runtime::Province {
-            id: 2, owner: "FRA".into(), controller: "FRA".into(),
-            terrain: "plains".into(), neighbors: vec![3],
-        });
-        w.provinces.insert(3, crate::runtime::Province {
-            id: 3, owner: "GER".into(), controller: "GER".into(),
-            terrain: "plains".into(), neighbors: vec![2],
-        });
+        // 省份: 省2=FRA(敌方, A 战败处), 省3=GER(省2 的邻省, 撤退目标)
+        add_test_province(&mut w, 2, "FRA", "plains", vec![3]);
+        add_test_province(&mut w, 3, "GER", "plains", vec![2]);
 
         resolve_all_battles(&mut w);
 
@@ -774,14 +772,8 @@ mod tests {
             ..Default::default()
         });
         // 省份: 省2=FRA, 省3=FRA(邻接, 撤退目标)
-        w.provinces.insert(2, crate::runtime::Province {
-            id: 2, owner: "FRA".into(), controller: "FRA".into(),
-            terrain: "plains".into(), neighbors: vec![3],
-        });
-        w.provinces.insert(3, crate::runtime::Province {
-            id: 3, owner: "FRA".into(), controller: "FRA".into(),
-            terrain: "plains".into(), neighbors: vec![2],
-        });
+        add_test_province(&mut w, 2, "FRA", "plains", vec![3]);
+        add_test_province(&mut w, 3, "FRA", "plains", vec![2]);
 
         resolve_all_battles(&mut w);
 
@@ -819,14 +811,8 @@ mod tests {
             attackers: vec![_a_id], defenders: vec![d_id],
             ..Default::default()
         });
-        w.provinces.insert(2, crate::runtime::Province {
-            id: 2, owner: "FRA".into(), controller: "FRA".into(),
-            terrain: "plains".into(), neighbors: vec![3],
-        });
-        w.provinces.insert(3, crate::runtime::Province {
-            id: 3, owner: "FRA".into(), controller: "FRA".into(),
-            terrain: "plains".into(), neighbors: vec![2],
-        });
+        add_test_province(&mut w, 2, "FRA", "plains", vec![3]);
+        add_test_province(&mut w, 3, "FRA", "plains", vec![2]);
 
         resolve_all_battles(&mut w);
 
@@ -865,22 +851,15 @@ mod tests {
             attackers: vec![_a_id], defenders: vec![d_id],
             ..Default::default()
         });
-        w.provinces.insert(2, crate::runtime::Province {
-            id: 2, owner: "FRA".into(), controller: "FRA".into(),
-            terrain: "plains".into(), neighbors: vec![3],
-        });
-        w.provinces.insert(3, crate::runtime::Province {
-            id: 3, owner: "FRA".into(), controller: "FRA".into(),
-            terrain: "plains".into(), neighbors: vec![2],
-        });
+        add_test_province(&mut w, 2, "FRA", "plains", vec![3]);
+        add_test_province(&mut w, 3, "FRA", "plains", vec![2]);
 
         // 第1步: D 战败 → 转 Retreating, location 仍=省2
         resolve_all_battles(&mut w);
         assert!(w.divisions.get(&d_id).unwrap().is_withdrawing(), "D 应进入 Retreating");
 
         // 第2步: 模拟原省2 被敌军(GER)夺回(归属变化)
-        w.provinces.get_mut(&2).unwrap().controller = "GER".into();
-        w.provinces.get_mut(&2).unwrap().owner = "GER".into();
+        w.set_state_controller(2, "GER");
 
         // 第3步: 跑 check_engagements — D 是 Retreating, 应被跳过, 不开新战斗
         crate::combat::movement::check_engagements(&mut w);
