@@ -1,6 +1,8 @@
 //! 战斗宽度 + 增援队列(陆战循环)
 //!
 //! 基础宽度 70; 超出的师进预备队; 前线退下后预备队按概率补位。
+//! 宽度上限可被 modifier 改变(地形/科技)。
+use crate::combat::modifier::{ModifierStack, ModifierStat};
 use crate::runtime::World;
 
 /// 基础战斗宽度(原版地形文件, 平原/森林/丘陵均70)
@@ -25,10 +27,23 @@ fn reinforce_triggered(hour: u64, div_id: u64) -> bool {
     r < REINFORCE_CHANCE
 }
 
-/// 判断新师能否加入前线(加入后宽度是否<=70)
-pub fn can_join_frontline(world: &World, frontline: &[u64], new_div_width: f64) -> bool {
+/// 模块内便捷: 取静态空栈引用(现状不变; 后续地形/科技生效时改为传真实 mods)
+fn empty_mods() -> &'static ModifierStack {
+    ModifierStack::empty_static()
+}
+
+/// 判断新师能否加入前线(加入后宽度是否 <= 上限)
+/// 上限 = BASE_COMBAT_WIDTH × mods.multiplier(CombatWidth)
+/// 空栈 multiplier=1.0 → 上限仍 70(现状不变)
+pub fn can_join_frontline(
+    world: &World,
+    frontline: &[u64],
+    new_div_width: f64,
+    mods: &ModifierStack,
+) -> bool {
     let used = world.used_width(frontline);
-    used + new_div_width <= BASE_COMBAT_WIDTH
+    let cap = BASE_COMBAT_WIDTH * mods.multiplier(ModifierStat::CombatWidth);
+    used + new_div_width <= cap
 }
 
 /// 每小时增援: 预备队师按概率补入前线空位
@@ -48,7 +63,7 @@ pub fn reinforce_reserves(world: &mut World) {
         for div_id in &res_atk {
             let width = world.divisions.get(div_id).map(|d| d.combat_width).unwrap_or(0.0);
             let frontline = &world.battles[idx].attackers;
-            if can_join_frontline(world, frontline, width) && reinforce_triggered(hour, *div_id) {
+            if can_join_frontline(world, frontline, width, empty_mods()) && reinforce_triggered(hour, *div_id) {
                 joined_atk.push(*div_id);
             }
         }
@@ -57,7 +72,7 @@ pub fn reinforce_reserves(world: &mut World) {
         for div_id in &res_def {
             let width = world.divisions.get(div_id).map(|d| d.combat_width).unwrap_or(0.0);
             let frontline = &world.battles[idx].defenders;
-            if can_join_frontline(world, frontline, width) && reinforce_triggered(hour, *div_id) {
+            if can_join_frontline(world, frontline, width, empty_mods()) && reinforce_triggered(hour, *div_id) {
                 joined_def.push(*div_id);
             }
         }
@@ -93,7 +108,7 @@ mod tests {
         let d1 = wide_div("GER", 40.0);
         let id1 = world.add_division(d1);
         // 前线40 + 新师20 = 60 <= 70, 可加入
-        assert!(can_join_frontline(&world, &[id1], 20.0));
+        assert!(can_join_frontline(&world, &[id1], 20.0, empty_mods()));
     }
 
     #[test]
@@ -102,7 +117,7 @@ mod tests {
         let d1 = wide_div("GER", 60.0);
         let id1 = world.add_division(d1);
         // 前线60 + 新师20 = 80 > 70, 不能加入
-        assert!(!can_join_frontline(&world, &[id1], 20.0));
+        assert!(!can_join_frontline(&world, &[id1], 20.0, empty_mods()));
     }
 
     #[test]
