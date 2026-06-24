@@ -493,6 +493,36 @@ pub fn register(reg: &mut Registry) {
         }
     });
 
+    // 加国家级 modifier(科技/国策/精神触发)
+    // stat 用原版属性名(带或不带 _factor), op 由后缀推导(spec §3)
+    reg.register("add_country_modifier", |w, p| {
+        let tag = np(p, "add_country_modifier", "tag")?.as_str()
+            .ok_or_else(|| CmdError::RuntimeError("tag 应为字符串".into()))?;
+        let token = np(p, "add_country_modifier", "stat")?.as_str()
+            .ok_or_else(|| CmdError::RuntimeError("stat 应为字符串".into()))?;
+        let value = num_of(np(p, "add_country_modifier", "value")?)?;
+        let (stat, op) = crate::combat::modifier::parse_modifier_token(token)
+            .ok_or_else(|| CmdError::RuntimeError(format!("未知属性: {token}")))?;
+        let country = w.countries.entry(tag.into()).or_default();
+        country.modifiers.push(crate::combat::modifier::Modifier { stat, value, op });
+        Ok(())
+    });
+
+    // 加师级 modifier(堑壕/计划/经验)
+    reg.register("add_division_modifier", |w, p| {
+        let div_id = num_of(np(p, "add_division_modifier", "division")?)? as u64;
+        let token = np(p, "add_division_modifier", "stat")?.as_str()
+            .ok_or_else(|| CmdError::RuntimeError("stat 应为字符串".into()))?;
+        let value = num_of(np(p, "add_division_modifier", "value")?)?;
+        let (stat, op) = crate::combat::modifier::parse_modifier_token(token)
+            .ok_or_else(|| CmdError::RuntimeError(format!("未知属性: {token}")))?;
+        let Some(d) = w.divisions.get_mut(&div_id) else {
+            return Err(CmdError::RuntimeError(format!("师 {div_id} 不存在")));
+        };
+        d.modifiers.push(crate::combat::modifier::Modifier { stat, value, op });
+        Ok(())
+    });
+
     // trigger: 当前作用域师是否破阵
     reg.register_trigger("is_broken", |w, _p| {
         if let Some(did) = w.current_scope().division_id() {
