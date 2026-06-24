@@ -76,10 +76,8 @@ pub unsafe extern "C" fn engine_set_province_controller(
 ) {
     let tag = unsafe { ptr_to_str(tag_ptr, tag_len) };
     ENGINE.with(|e| {
-        if let Some(p) = e.borrow_mut().world.provinces.get_mut(&province_id) {
-            p.controller = tag.to_string();
-            p.owner = tag.to_string();
-        }
+        let mut engine = e.borrow_mut();
+        engine.world.set_state_controller(province_id, tag);
     });
 }
 
@@ -342,16 +340,22 @@ fn serialize_state(world: &World) -> String {
     s.push_str("]");
     // 省份(节点图用: id/controller/neighbors)
     s.push_str(",\"provinces\":[");
+    // 快照省份数据(从 State 派生 controller/owner, 避借用冲突)
+    let prov_data: Vec<(u32, String, String, Vec<u32>)> = world.provinces.values().map(|p| {
+        let controller = world.province_controller(p.id).unwrap_or("").to_string();
+        let owner = world.province_owner(p.id).unwrap_or("").to_string();
+        (p.id, controller, owner, p.neighbors.clone())
+    }).collect();
     let mut pfirst = true;
-    for p in world.provinces.values() {
+    for (id, controller, owner, neighbors) in &prov_data {
         if !pfirst { s.push(','); }
         pfirst = false;
         s.push_str(&format!(
-            "{{\"id\":{},\"controller\":\"{}\",\"neighbors\":[",
-            p.id, p.controller
+            "{{\"id\":{},\"controller\":\"{}\",\"owner\":\"{}\",\"neighbors\":[",
+            id, controller, owner
         ));
         let mut nfirst = true;
-        for n in &p.neighbors {
+        for n in neighbors {
             if !nfirst { s.push(','); }
             nfirst = false;
             s.push_str(&n.to_string());
