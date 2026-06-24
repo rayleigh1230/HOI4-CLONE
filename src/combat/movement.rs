@@ -221,10 +221,10 @@ pub fn advance_movement(world: &mut World) {
                 if !a.remaining.is_empty() {
                     let next = a.remaining[0];
                     let new_remaining = a.remaining[1..].to_vec();
+                    // 先查 controller(释放借用后再 get_mut, 避免借用冲突)
+                    let hostile = world.province_controller(next)
+                        .map(|c| c != a.owner).unwrap_or(false);
                     if let Some(d) = world.divisions.get_mut(&a.id) {
-                        let hostile = world.provinces.get(&next)
-                            .map(|p| p.controller != a.owner)
-                            .unwrap_or(false);
                         d.order = OrderState::Moving {
                             dest: next, progress: 0.0,
                             hostile, origin: a.dest, // 出发地 = 刚占领的省
@@ -256,14 +256,10 @@ pub fn advance_movement(world: &mut World) {
     }
     // 第三阶段: 结算到达(占领非己方地块)
     for a in arrivals {
-        let is_own = world.provinces.get(&a.dest)
-            .map(|p| p.controller == a.owner)
-            .unwrap_or(false);
+        let is_own = world.province_controller(a.dest)
+            .map(|c| c == a.owner).unwrap_or(false);
         if !is_own {
-            if let Some(p) = world.provinces.get_mut(&a.dest) {
-                p.controller = a.owner.clone();
-                p.owner = a.owner;
-            }
+            world.set_state_controller(a.dest, &a.owner);
             if let Some(d) = world.divisions.get_mut(&a.id) {
                 d.org = (d.org - d.max_org * ORG_LOSS_ON_CONQUER).max(0.0);
             }
@@ -301,24 +297,19 @@ pub fn advance_movement(world: &mut World) {
         // 先算 next 段的 hostile(需借用 owner, 在下面 owner 被 move 之前)
         let next_hostile = if !remaining_left.is_empty() {
             let next = remaining_left[0];
-            world.provinces.get(&next)
-                .map(|p| p.controller != owner)
-                .unwrap_or(false)
+            world.province_controller(next)
+                .map(|c| c != owner).unwrap_or(false)
         } else {
             false
         };
-        let is_own = world.provinces.get(&dest)
-            .map(|p| p.controller == owner)
-            .unwrap_or(false);
+        let is_own = world.province_controller(dest)
+            .map(|c| c == owner).unwrap_or(false);
         if let Some(d) = world.divisions.get_mut(&id) {
             d.order = OrderState::Idle;
             d.location_province = dest;
         }
         if !is_own {
-            if let Some(p) = world.provinces.get_mut(&dest) {
-                p.controller = owner.clone();
-                p.owner = owner; // owner move 在此
-            }
+            world.set_state_controller(dest, &owner);
             if let Some(d) = world.divisions.get_mut(&id) {
                 d.org = (d.org - d.max_org * ORG_LOSS_ON_CONQUER).max(0.0);
             }
@@ -366,6 +357,18 @@ pub fn invalidate_paths_to_inaccessible(world: &mut World) {
 mod tests {
     use super::*;
     use crate::runtime::entities::{Division, OrderState};
+
+    /// 测试辅助: 建省份 + 对应 State(归属从 State 派生)
+    fn add_test_province(w: &mut World, id: u32, owner: &str, terrain: &str, neighbors: Vec<u32>) {
+        let sid = id * 1000;
+        w.states.insert(sid, crate::runtime::State {
+            id: sid, owner: owner.into(), controller: owner.into(),
+            ..Default::default()
+        });
+        w.provinces.insert(id, crate::runtime::Province {
+            id, state_id: sid, terrain: terrain.into(), neighbors,
+        });
+    }
 
     #[test]
     fn t_division_moves_to_destination() {
@@ -432,10 +435,7 @@ mod tests {
     #[test]
     fn t_conquering_loses_org() {
         let mut w = World::new();
-        w.provinces.insert(2, crate::runtime::Province {
-            id: 2, owner: "FRA".into(), controller: "FRA".into(),
-            terrain: "plains".into(), neighbors: vec![1],
-        });
+        add_test_province(&mut w, 2, "FRA", "plains", vec![1]);
         let d = Division {
             id: 0, owner_tag: "GER".into(), location_province: 1,
             order: OrderState::Moving { dest: 2, progress: 0.99, hostile: true, origin: 1, remaining: vec![] },
@@ -448,7 +448,7 @@ mod tests {
         assert_eq!(div.location_province, 2);
         assert!(div.org < 60.0, "占领应掉org: {}", div.org);
         // 省份归 GER
-        assert_eq!(w.provinces.get(&2).unwrap().controller, "GER");
+        assert_eq!(w.province_controller(2).unwrap_or(""), "GER");
     }
 
     // ===== P2: 地块被进攻 → 归属地师自动成防守方(即使该师正进攻别处) =====
@@ -544,18 +544,9 @@ mod tests {
     /// 3 省链 1-2-3, 省2 是敌方空省(待占领), 省3 己方
     fn chain_1_2_3_world() -> World {
         let mut w = World::new();
-        w.provinces.insert(1, crate::runtime::Province {
-            id: 1, owner: "GER".into(), controller: "GER".into(),
-            terrain: "plains".into(), neighbors: vec![2],
-        });
-        w.provinces.insert(2, crate::runtime::Province {
-            id: 2, owner: "FRA".into(), controller: "FRA".into(),
-            terrain: "plains".into(), neighbors: vec![1, 3],
-        });
-        w.provinces.insert(3, crate::runtime::Province {
-            id: 3, owner: "GER".into(), controller: "GER".into(),
-            terrain: "plains".into(), neighbors: vec![2],
-        });
+        add_test_province(&mut w, 1, "GER", "plains", vec![2]);
+        add_test_province(&mut w, 2, "FRA", "plains", vec![1, 3]);
+        add_test_province(&mut w, 3, "GER", "plains", vec![2]);
         w
     }
 
@@ -587,8 +578,7 @@ mod tests {
         // 战斗结束(敌人消失)→ 占领省2 → 续走省3
         let mut w = chain_1_2_3_world();
         // 省3 也设 FRA, 省2 放一个 FRA 师(org 归零会被清出战斗)
-        w.provinces.get_mut(&3).unwrap().controller = "FRA".into();
-        w.provinces.get_mut(&3).unwrap().owner = "FRA".into();
+        w.set_state_controller(3, "FRA");
         let enemy = Division {
             id: 0, owner_tag: "FRA".into(), location_province: 2,
             max_strength: 20.0, strength: 20.0, max_org: 60.0, org: 0.0,

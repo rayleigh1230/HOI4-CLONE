@@ -32,8 +32,11 @@ pub fn recover_org(world: &mut World) {
         // 按状态机决定 org 变化
         // Moving 到敌方非己方地块: 每小时 -0.2, 不恢复; 其余状态恢复
         if let OrderState::Moving { dest, hostile: true, .. } = div.order {
+            // 内联字段访问(不用 province_controller 方法, 避免借整个 &self 与 values_mut 冲突)
+            // Rust 分离字段借用: provinces/states 不可变 + divisions 可变, 不冲突
             let is_friendly = world.provinces.get(&dest)
-                .map(|p| p.controller == div.owner_tag)
+                .and_then(|p| world.states.get(&p.state_id))
+                .map(|s| s.controller == div.owner_tag)
                 .unwrap_or(false);
             if !is_friendly {
                 div.org = (div.org + HOURLY_ORG_MOVEMENT_IMPACT).max(0.0);
