@@ -100,11 +100,41 @@ fn join_as_attacker(world: &mut crate::runtime::World, div_id: u64, target: u32,
 }
 
 pub fn register(reg: &mut Registry) {
-    // 创建省份(行军基础设施: owner/controller/neighbors)
+    // 建州(归属/建筑/人力的权威源)
+    reg.register("create_state", |w, p| {
+        let id = num_of(np(p, "create_state", "id")?)? as u32;
+        let name = ParamGet::get(p, "name").and_then(Arg::as_str).unwrap_or("").to_string();
+        let owner = np(p, "create_state", "owner")?.as_str()
+            .ok_or_else(|| CmdError::RuntimeError("owner 应为字符串".into()))?;
+        let controller = ParamGet::get(p, "controller").and_then(Arg::as_str).unwrap_or(owner).to_string();
+        let manpower = ParamGet::get(p, "manpower").and_then(Arg::as_num).unwrap_or(0.0);
+        let category = ParamGet::get(p, "state_category").and_then(Arg::as_str).unwrap_or("wasteland").to_string();
+        // cores = { GER FRA } 裸值列表
+        let mut cores = Vec::new();
+        if let Some(Arg::Block(fields)) = ParamGet::get(p, "cores") {
+            for (_, v) in fields {
+                if let Some(s) = v.as_str() { cores.push(s.to_string()); }
+            }
+        }
+        // buildings = { infrastructure = 5 ... } 命名块
+        let mut buildings = std::collections::HashMap::new();
+        if let Some(Arg::Block(fields)) = ParamGet::get(p, "buildings") {
+            for (k, v) in fields {
+                if let Some(n) = v.as_num() { buildings.insert(k.clone(), n); }
+            }
+        }
+        w.states.insert(id, crate::runtime::State {
+            id, name, owner: owner.into(), controller, manpower,
+            state_category: category, cores, buildings,
+            provinces: vec![],
+        });
+        Ok(())
+    });
+
+    // 创建省份(行军基础设施: state_id/terrain/neighbors)
     reg.register("create_province", |w, p| {
         let id = num_of(np(p, "create_province", "id")?)? as u32;
-        let owner = np(p, "create_province", "owner")?.as_str()
-            .ok_or_else(|| CmdError::RuntimeError("owner 应为字符串".into()))?;
+        let state_id = num_of(np(p, "create_province", "state")?)? as u32;
         let terrain = ParamGet::get(p, "terrain").and_then(Arg::as_str).unwrap_or("plains");
         // neighbors: 嵌套块参数 neighbors = { 10 20 } 或单值
         let mut neighbors = Vec::new();
@@ -116,12 +146,12 @@ pub fn register(reg: &mut Registry) {
             }
         }
         w.provinces.insert(id, crate::runtime::Province {
-            id,
-            owner: owner.into(),
-            controller: owner.into(),
-            terrain: terrain.into(),
-            neighbors,
+            id, state_id, terrain: terrain.into(), neighbors,
         });
+        // 反向注册: 省 id 加入所属 State 的 provinces 列表
+        if let Some(state) = w.states.get_mut(&state_id) {
+            state.provinces.push(id);
+        }
         Ok(())
     });
 
@@ -303,8 +333,7 @@ pub fn register(reg: &mut Registry) {
         // 防守主动撤退判定(规则4: 撤退只去邻近省份):
         // 师当前在战斗地块 + 目标是相邻的己方控制省 → 撤退
         let on_battle_province = w.battles.iter().any(|b| b.province == cur_loc);
-        let target_is_friendly = w.provinces.get(&target)
-            .map(|p| p.controller == owner).unwrap_or(false);
+        let target_is_friendly = w.province_controller(target).map(|c| c == owner).unwrap_or(false);
         let target_is_adjacent = w.provinces.get(&cur_loc)
             .map(|p| p.neighbors.contains(&target))
             .unwrap_or(false);
@@ -343,7 +372,7 @@ pub fn register(reg: &mut Registry) {
         let first = path[0];
         let remaining: Vec<u32> = path[1..].to_vec();
         // 进军判定: 第一站非己方控制 → 进军红箭头
-        let first_controller = w.provinces.get(&first).map(|p| p.controller.as_str()).unwrap_or("");
+        let first_controller = w.province_controller(first).unwrap_or("");
         let is_hostile = first_controller != owner;
         // 设移动状态: dest=第一站, remaining=后续站
         if let Some(d) = w.divisions.get_mut(&div_id) {
@@ -472,8 +501,7 @@ pub fn register(reg: &mut Registry) {
                 };
                 let first = path[0];
                 let remaining: Vec<u32> = path[1..].to_vec();
-                let hostile = w.provinces.get(&first)
-                    .map(|p| p.controller != owner).unwrap_or(false);
+                let hostile = w.province_controller(first).map(|c| c != owner).unwrap_or(false);
                 if let Some(d) = w.divisions.get_mut(&div_id) {
                     d.order = OrderState::Moving {
                         dest: first, progress: 0.0, hostile, origin: cur_loc, remaining,
