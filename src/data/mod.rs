@@ -7,9 +7,11 @@
 pub mod equipment;
 pub mod loader;
 pub mod subunit;
+pub mod template;
 
 use crate::data::equipment::{ChassisDef, EquipmentDef, ModuleDef};
 use crate::data::subunit::SubUnitDef;
+use crate::data::template::DivisionTemplate;
 use std::collections::HashMap;
 
 /// 装备属性集合(战斗相关字段, 从 add_stats/multiply_stats 提取)
@@ -66,6 +68,7 @@ pub struct GameData {
     pub chassis: HashMap<String, ChassisDef>,
     pub equipment: HashMap<String, EquipmentDef>,   // 可生产装备
     pub sub_units: HashMap<String, SubUnitDef>,     // 营定义
+    pub templates: HashMap<String, DivisionTemplate>, // 师模板
     pub start_year: u32,
 }
 
