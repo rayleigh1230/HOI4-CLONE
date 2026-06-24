@@ -4,6 +4,8 @@
 //! loader 把 Block 当"数据定义"读, runtime::interp 把 Block 当"命令"执行。
 //! GameData 启动加载一次, 运行时只读不改。
 
+pub mod equipment;
+
 use std::collections::HashMap;
 
 /// 装备属性集合(战斗相关字段, 从 add_stats/multiply_stats 提取)

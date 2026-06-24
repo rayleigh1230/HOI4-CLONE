@@ -21,6 +21,25 @@ pub enum Value {
     List(Vec<String>),
 }
 
+impl Value {
+    /// 若 Value 是标量且可解析为 f64, 返回该值; 否则 None
+    /// 排除 inf/nan(Rust 把 "inf"/"nan" 解析为无穷/NaN, 但 HOI4 里这些常是 ident)
+    pub fn as_scalar_num(&self) -> Option<f64> {
+        match self {
+            Value::Scalar(s) => s.parse::<f64>().ok().filter(|n| n.is_finite()),
+            _ => None,
+        }
+    }
+
+    /// 若 Value 是标量字符串, 返回 &str; 否则 None
+    pub fn as_scalar_str(&self) -> Option<&str> {
+        match self {
+            Value::Scalar(s) => Some(s),
+            _ => None,
+        }
+    }
+}
+
 struct Cursor {
     toks: Vec<Token>,
     pos: usize,
