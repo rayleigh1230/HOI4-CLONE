@@ -1,7 +1,7 @@
 # hoi4-clone 项目交接文档
 
 > **用途**: 在新会话中继续开发。读本文件 + 列出的关键文件即可接上。
-> **更新**: 2026-06-25(demo 彻底改造完成 — 地图全屏+浮层/绑定式数据流/触屏适配/模板引用, 前端 25 文件 1166 行)
+> **更新**: 2026-06-25(demo 改造后修复 — canvas 脏标记崩溃/路径级绑定/底栏时间控制/overlay 分层/装备补给修正; 引入 Playwright 真机验证 13/13)
 
 ---
 
@@ -35,6 +35,32 @@
 | **日期系统** | GameDate 精确公历(闰年/月份天数) + World.date()派生 + clock月切换修正 | 177 |
 | **战争状态** | War关系(are_at_war判定) + 阵营自动拉入 + 敌人判定改造 | 180 |
 | **demo 彻底改造** | 地图全屏+浮层/绑定式数据流/触屏/模板引用/ change_template/ 6图层Canvas / ES Module 四层架构 | 122+UI |
+| **demo 改造后修复+验证** | 见下方"demo 改造后修复"小节(9 项修复 + Playwright 真机验证 13/13) | 122+UI |
+
+### demo 改造后修复(2026-06-25, 对齐 demo-overhaul spec/plan)
+
+改造完成后 demo 一启动即崩(主因 #1), 经系统性排查定位 9 个问题, 全部修复并以 Playwright 真机验证 13/13 通过。每项均标注对应的 spec/plan 条目, 便于新故障往回追溯。
+
+| # | 问题(根因) | 修复 | 对齐 spec/plan |
+|---|---|---|---|
+| 1 | `canvas.js` 的 `fullRedraw` 变量被使用但**从未声明**(3 处), ES module 严格模式下 `init()→resize()` 抛 `ReferenceError`, 中断整个 `main()` → 空白无交互(此前 6 个 fix commit 的真根因) | 加 `let fullRedraw = true;`; resize 防御性 `Math.max(1, ...)` | spec §6.2(render 用 `layer.dirty \|\| fullRedraw`) |
+| 2 | 坐标系: `provincePos` 用视口 W×H 当世界坐标, 命中检测用 `innerWidth/Height` | 确认 canvas `inset:0` 全屏, 两者当前相等; Playwright 验证点击命中正常(暂无需改, 已留注) | spec §6.2(相机统一坐标) |
+| 3 | `#bottombar` HTML/CSS 存在但**无 JS 填充**=死元素; 时间按钮被塞进 topbar 违反 spec | 新增 `ui/bottombar.js`, 时间控制移入底栏; topbar 只留日期+系统按钮+切控制权 | spec §7.1(时间放底部命令栏)/plan Task 13 |
+| 4 | `store.js` 是**全量通知**(spec 声称路径级脏标记但没实现), 每 tick 所有订阅者全跑 | 重写 store: `setState` 做 `diffKeys`, `subscribeKeys([key])` 仅声明 key 变化才通知 | spec §3.3(路径级脏标记) |
+| 5 | `bindList` 每 tick 全量重建列表 → 用户正选的 `<select>` 选中态被刷掉 | `bindList`/`bindText` 改用 `subscribeKeys`, 只在数据真变时重建 | spec §3.3 + §3.4(换模板数据流) |
+| 6 | `layerOverlay.js` 是空占位(`// xxx`), 选中高亮被塞在 layerProvince 里违反分层 | 选中高亮逻辑移到 layerOverlay(金色环+标签); layerProvince 只画基础省份 | spec §6.1(overlay 负责选中/tooltip) |
+| 7 | `index.html` 无 `#log` 元素 → `main.js:log()`/orderMenu 静默无反馈 | index.html 加 `#log`; CSS 加右上角浮层样式 | plan Task 13(log 调试用) |
+| 8 | `engine_supply` 误补 `medium_tank`(无营引用), 装甲师 light_armor 营真正 need 的 `light_tank_chassis` 没补 → 装甲师 eq_ratio 偏低 | 改补 `infantry_equipment`/`light_tank_chassis`/`artillery_equipment`(对齐营 need) | spec §8.2(装甲对比)/数据正确性 |
+| 9 | `parser/block.rs:183` `other =>` 不可达分支(key_token 已兜底) → unreachable_patterns 警告 | 删除 dead code, 注释说明 | 工程整洁 |
+
+**验证**: `tests/web_demo.mjs`(Playwright, 用系统 Chrome `channel:'chrome'`) 13 项全过: loading 隐藏/game 显示/无 console.error/无 pageerror/canvas 非零尺寸/canvas 画出内容(724 非黑采样点, 含 GER红`#e94560`+FRA绿)/get_state 含 date/wars/factions/顶栏日期+系统按钮/底栏时间控制/点击弹抽屉/tick 推进/截图。截图: `tests/demo-final.png`。
+
+**运行验证脚本**:
+```bash
+cd web && python -m http.server 8765 &   # 另开终端
+npm install playwright-chromium            # 一次性
+node tests/web_demo.mjs                    # 13/13 应全过
+```
 
 ### 基础构造层(本阶段, 2026-06-24~25)
 

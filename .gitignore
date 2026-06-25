@@ -2,3 +2,8 @@
 *.exe
 *.pdb
 .superpowers/
+
+# 浏览器自动化验证(playwright, 仅本地用, 不进仓库)
+/node_modules
+/package.json
+/package-lock.json

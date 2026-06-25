@@ -1840,3 +1840,37 @@ rm web/index.html.bak
 git add -A
 git commit -m "feat: demo 彻底改造完成(全屏地图+绑定式数据流+触屏+template引用)"
 ```
+
+---
+
+## Task 16: demo 改造后修复 + Playwright 自动化验证(2026-06-25)
+
+> Task 1-15 实现完成后, 实际运行发现 demo 一启动即崩。系统性排查定位 9 个问题(主因: canvas.js 的 `fullRedraw` 未声明导致 `init()` 在严格模式抛 `ReferenceError`, 中断整个 main —— 这正是此前 6 个 `fix(ui)` commit 没找到的真根因)。本 Task 全部修复, 并引入 Playwright 真机验证, 13/13 通过。详细根因/修复/spec 对齐见 `docs/HANDOFF.md`「demo 改造后修复」小节。
+
+**Files:**
+- Modify: `web/js/core/canvas.js`(声明 fullRedraw + 恢复脏标记语义)
+- Modify: `web/js/core/store.js`(重写: diffKeys + subscribeKeys 路径级脏标记)
+- Modify: `web/js/core/bind.js`(bindList/bindText 改路径订阅)
+- Create: `web/js/ui/bottombar.js`(时间控制移入底栏)
+- Modify: `web/js/ui/topbar.js`(移除时间按钮, 改路径订阅 date)
+- Modify: `web/js/map/layerProvince.js`(选中高亮分离出去)
+- Rewrite: `web/js/map/layerOverlay.js`(承接选中高亮)
+- Modify: `web/index.html`(加 #log + favicon data-uri)
+- Modify: `web/css/app.css`(#log 浮层样式)
+- Modify: `web/js/main.js`(接入 bottombar)
+- Modify: `src/wasm_api.rs`(engine_supply 补 light_tank_chassis)
+- Modify: `src/parser/block.rs`(删 unreachable dead code)
+- Create: `tests/web_demo.mjs`(Playwright 验证脚本)
+- Modify: `.gitignore`(忽略 node_modules)
+
+- [x] **Step 1: 修复 #1 canvas fullRedraw 未声明**(致命, demo 启动崩溃根因)
+- [x] **Step 2: 修复 #4/#5 store 路径级脏标记 + bind 路径订阅**(对齐 spec §3.3)
+- [x] **Step 3: 修复 #3 新建 bottombar, 时间控制移入**(对齐 spec §7.1)
+- [x] **Step 4: 修复 #6 overlay 承接选中高亮**(对齐 spec §6.1)
+- [x] **Step 5: 修复 #7 补 #log 元素 + 样式**
+- [x] **Step 6: 修复 #8 engine_supply 补 light_tank_chassis**(对齐 spec §8.2)
+- [x] **Step 7: 修复 #9 删 parser unreachable dead code**(wasm 0 警告)
+- [x] **Step 8: 编译 wasm + cargo test --lib 122 全绿 + wasm 0 警告**
+- [x] **Step 9: 装 playwright-chromium, 写 tests/web_demo.mjs**
+- [x] **Step 10: 真机验证 13/13 通过(系统 Chrome channel:'chrome')**
+- [x] **Step 11: 更新 HANDOFF(修复小节)+ 本 PLAN(Task 16)**
