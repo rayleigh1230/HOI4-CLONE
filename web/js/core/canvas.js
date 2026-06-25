@@ -1,8 +1,8 @@
 // Canvas 管家: 相机(pan/zoom) + 图层注册 + 坐标转换 + 脏标记重绘
 let canvasEl, ctx, dpr;
-const layers = [];  // [{ name, z, draw, dirty }]
+const layers = [];
 const camera = { x: 0, y: 0, zoom: 1 };
-let fullRedraw = true;
+let _lastView = null;   // 最近一次 render 的 view, pan/zoom 后复用
 
 export function init() {
   canvasEl = document.getElementById('map');
@@ -38,17 +38,16 @@ export function markAllDirty() { fullRedraw = true; }
 export function pan(dx, dy) {
   camera.x += dx;
   camera.y += dy;
-  fullRedraw = true;
+  _rerender();
 }
 
 export function zoomBy(f, cx, cy) {
-  // 以屏幕点(cx, cy)为锚点缩放(该点世界坐标保持不变)
   const wx = (cx - camera.x) / camera.zoom;
   const wy = (cy - camera.y) / camera.zoom;
   camera.zoom = Math.max(0.3, Math.min(5, camera.zoom * f));
   camera.x = cx - wx * camera.zoom;
   camera.y = cy - wy * camera.zoom;
-  fullRedraw = true;
+  _rerender();
 }
 
 export function resetCamera() {
@@ -71,16 +70,17 @@ export function screenToWorld(p) {
 // 获取相机状态(图层可读)
 export function getCamera() { return { ...camera }; }
 
-// 渲染: 每帧调一次, 传入 viewModel。始终全层重绘(dirty 优化留后续大数据时)。
 export function render(view) {
   if (!ctx) return;
+  _lastView = view;
   const W = canvasEl.clientWidth, H = canvasEl.clientHeight;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, W, H);
-
   for (const l of layers) {
     ctx.save();
     l.draw(ctx, view, { worldToScreen, camera, W, H });
     ctx.restore();
   }
 }
+
+function _rerender() { if (_lastView) render(_lastView); }
