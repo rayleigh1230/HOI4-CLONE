@@ -145,23 +145,27 @@ if (combatInfo?.battles > 0) {
   check('ESC 关闭面板', escClosed);
 }
 
-// 6b2. 框选(左键拖拽)出部队列表(用户反馈问题2)。框住师1牌子(省1重心上方)
-const boxResult = await page.evaluate(() => {
+// 6b2. 拖拽兵牌下令(对齐原版): 从师1牌子拖到省7重心, 松开弹命令菜单。
+const dragRes = await page.evaluate(() => {
   const W=innerWidth,H=innerHeight,m=20,WW=1000,WH=700;
   const z=Math.min((W-m*2)/WW,(H-m*2)/WH);
   return { z, camX:W/2-WW/2*z, camY:H/2-WH/2*z };
 });
-// 师1牌子中心 = 世界(100, 195-28) → 屏幕
-const card1x = 100 * boxResult.z + boxResult.camX;
-const card1y = (195 - 28) * boxResult.z + boxResult.camY;
-await page.mouse.move(card1x - 50, card1y - 30);
+// 师1牌子中心(省1重心(100,195)上方28) → 省7重心(300,505)
+const fromX = 100 * dragRes.z + dragRes.camX;
+const fromY = (195 - 28) * dragRes.z + dragRes.camY;
+const toX = 300 * dragRes.z + dragRes.camX;
+const toY = 505 * dragRes.z + dragRes.camY;
+await page.mouse.move(fromX, fromY);
 await page.mouse.down();
-await page.mouse.move(card1x + 50, card1y + 30, { steps: 8 });
+await page.mouse.move(toX, toY, { steps: 10 });
+await page.waitForTimeout(200);
+// 拖动中目标省(省7)应高亮 — 验证悬停省高亮(读 store 无, 改验 overlay 状态间接: 松开后菜单)
 await page.mouse.up();
-await page.waitForTimeout(500);
-const selOpen = await page.locator('#panel-host').evaluate(el => el.classList.contains('open'));
-const selText = await page.locator('#panel-host').innerText();
-check('左键框选弹出部队列表', selOpen && /师|选中/.test(selText), 'open=' + selOpen + ' text=' + selText.slice(0, 30));
+await page.waitForTimeout(400);
+const orderOpen = await page.locator('#order-menu').evaluate(el => el.classList.contains('open'));
+const orderText = await page.locator('#order-menu').innerText();
+check('拖拽兵牌到省弹命令菜单', orderOpen && /进军|航点|支援/.test(orderText), 'open=' + orderOpen + ' text=' + orderText.slice(0, 30));
 await page.keyboard.press('Escape');  // 清理
 
 // 6c. 多边形地形渲染: 采样含地形绿色调像素(spec §3.1)

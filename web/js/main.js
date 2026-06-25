@@ -15,7 +15,6 @@ import { init as initDeploy } from './views/deployPanel.js';
 import { init as initDiplo } from './views/diplomacyPanel.js';
 import { init as initUnitPanel } from './views/unitPanel.js';
 import { init as initCombat, openBattle } from './views/combatPanel.js';
-import { init as initSelection, showSelection } from './views/selectionPanel.js';
 import * as drawer from './ui/drawer.js';
 import * as orderMenu from './ui/orderMenu.js';
 import { render as renderTopbar } from './ui/topbar.js';
@@ -96,7 +95,6 @@ async function main() {
   initDiplo();
   initUnitPanel();
   initCombat();
-  initSelection();
 
   // 顶栏 + 底栏渲染(时间控制在 bottombar, 对齐 spec §7.1)
   renderTopbar();
@@ -146,28 +144,7 @@ async function main() {
       }
     }
 
-    // 命中优先级 2: 师牌子(点牌 = 选中师)。对齐问题1(点省/点师区分)。
-    const divs = view.divisions || [];
-    for (const d of divs) {
-      const r = divCardRect(d, view, zoom);
-      if (r && sx >= r.x && sx <= r.x + r.w && sy >= r.y && sy <= r.y + r.h) {
-        selectedDiv = d.id;
-        unitLayer.selectDivision(d.id);
-        orderMenu.hide();
-        drawer.open([
-          h('h3', { text: `🎖 ${d.owner} 师#${d.id}` }),
-          h('div', { class: 'div-card ' + (d.owner === 'GER' ? 'attacker' : 'defender') }, [
-            h('div', { text: d.template || '(无模板)', style: { fontWeight: 'bold', marginBottom: '4px' } }),
-            statbar(d.org, d.max_org, d.str, d.max_str, d.eq_ratio, d.mp_ratio),
-            h('div', { text: `📍省${d.loc}  点击他省下令`, style: { fontSize: '11px', color: '#7ec8e3', marginTop: '6px' } }),
-          ]),
-        ]);
-        refresh();
-        return true;
-      }
-    }
-
-    // 命中优先级 3: 省份多边形(pointInPolygon)。对齐 spec §3.4
+    // 命中优先级 2: 省份多边形(pointInPolygon)。兵牌交互归拖拽(onDownCheck/onDragEnd), 不在此处理。
     const ids = view.provinces.map(p => p.id);
     const best = provinceAt(wp, ids);
     if (best == null) return false;
@@ -188,12 +165,7 @@ async function main() {
       return true;
     }
 
-    // 已选师 → 点省弹命令菜单(下令后菜单自动消失, orderMenu 内部 hide)。对齐问题6。
-    if (selectedDiv) {
-      orderMenu.show(selectedDiv, best);
-      refresh();
-      return true;
-    }
+    // 已选师→点省下令的旧逻辑已由"拖拽兵牌"取代(onDragEnd)。
 
     // 点空省 → 只选中省(金色描边), 弹轻量省信息抽屉(不自动选师)
     const p = view.provinces.find(x => x.id === best);
@@ -218,37 +190,69 @@ async function main() {
     refresh();
   });
 
-  // 框选(左键拖拽): 算框住的师 → 左侧出部队列表面板。对齐用户反馈问题2。
-  input.onBoxSelect((rect) => {
+  // 拖拽下令(对齐原版 HOI4): 拖兵牌拉箭头指向目标省。
+  // onDownCheck: 按下时判定是否命中兵牌 → 命中返回 {divId} 触发拖拽下令模式。
+  input.onDownCheck((sx, sy) => {
     const view = store.state;
-    if (!view?.divisions?.length) return false;
+    if (!view?.divisions?.length) return null;
     const cam = canvas.getCamera();
-    const zoom = cam.zoom;
-    // 框选矩形是屏幕坐标, 师牌子也用屏幕坐标判断是否相交
-    const selected = [];
     for (const d of view.divisions) {
-      const r = divCardRect(d, view, zoom);
-      if (!r) continue;
-      // 牌子中心在框内, 或牌子与框相交 → 选中
-      const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
-      if (cx >= rect.x0 && cx <= rect.x1 && cy >= rect.y0 && cy <= rect.y1) {
-        selected.push(d);
+      const r = divCardRect(d, view, cam.zoom);
+      if (r && sx >= r.x && sx <= r.x + r.w && sy >= r.y && sy <= r.y + r.h) {
+        // 命中兵牌: 选中该师(拖拽下令的就是它; 未移动松开则保持选中)
+        selectedDiv = d.id;
+        unitLayer.selectDivision(d.id);
+        return { divId: d.id };
       }
     }
-    // 关闭其他浮层
-    drawer.close();
-    orderMenu.hide();
-    if (selected.length > 0) {
-      showSelection(selected, (divId) => {
-        // 点列表里某师 → 选中它(回地图下令)
-        selectedDiv = divId;
-        unitLayer.selectDivision(divId);
-        refresh();
-      });
-    } else {
-      closePanel();
+    return null;
+  });
+
+  // onDragMove: 拖动中实时高亮鼠标悬停的省(金色描边)。
+  input.onDragMove((screen, world) => {
+    const view = store.state;
+    if (!view?.provinces?.length) return;
+    const ids = view.provinces.map(p => p.id);
+    const prov = provinceAt(world, ids);
+    if (prov !== overlay.getHoverProvince?.()) {
+      overlay.setHoverProvince(prov);
+      refresh();
     }
-    return true;
+  });
+
+  // onDragEnd: 松开 → 区分"点击兵牌"(距离小, 弹师信息) vs "拖拽下令"(拉到目标省弹命令菜单)。
+  input.onDragEnd((world, info) => {
+    const view = store.state;
+    overlay.setHoverProvince(null);
+    if (!view?.provinces?.length) { refresh(); return; }
+
+    // 拖拽距离: 很小则视为"点击兵牌"(选中 + 弹师抽屉), 不下令
+    const dragDist = Math.hypot(info.curScreen.x - info.fromScreen.x, info.curScreen.y - info.fromScreen.y);
+    const divId = info.fromDiv;
+    const div = view.divisions?.find(d => d.id === divId);
+    if (dragDist < 8 || !div) {
+      // 点击兵牌: 选中已由 onDownCheck 完成, 这里弹师信息抽屉
+      if (div) {
+        drawer.close(); orderMenu.hide();
+        drawer.open([
+          h('h3', { text: `🎖 ${div.owner} 师#${div.id}` }),
+          h('div', { class: 'div-card ' + (div.owner === 'GER' ? 'attacker' : 'defender') }, [
+            h('div', { text: div.template || '(无模板)', style: { fontWeight: 'bold', marginBottom: '4px' } }),
+            statbar(div.org, div.max_org, div.str, div.max_str, div.eq_ratio, div.mp_ratio),
+            h('div', { text: `📍省${div.loc}  拖拽兵牌到他省下令`, style: { fontSize: '11px', color: '#7ec8e3', marginTop: '6px' } }),
+          ]),
+        ]);
+      }
+      refresh();
+      return;
+    }
+
+    // 拖拽下令: 判定终点省 → 弹命令菜单
+    const ids = view.provinces.map(p => p.id);
+    const target = provinceAt(world, ids);
+    if (target == null || target === div.loc) { refresh(); return; }  // 拖到界外/原省, 取消
+    orderMenu.show(divId, target);
+    refresh();
   });
 
   // 初始化场景(新基础构造: create_state + create_province state= + 显式 declare_war)
