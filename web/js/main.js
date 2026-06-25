@@ -17,6 +17,8 @@ import { init as initUnitPanel } from './views/unitPanel.js';
 import { init as initCombat } from './views/combatPanel.js';
 import * as drawer from './ui/drawer.js';
 import * as orderMenu from './ui/orderMenu.js';
+import { render as renderTopbar } from './ui/topbar.js';
+import { render as renderBottombar } from './ui/bottombar.js';
 import { statbar } from './ui/statbar.js';
 import { h } from './core/el.js';
 import { setProvinceController } from './engine/commands.js';
@@ -74,8 +76,9 @@ async function main() {
   initUnitPanel();
   initCombat();
 
-  // 顶栏渲染
-  import('./ui/topbar.js').then(({ render }) => render());
+  // 顶栏 + 底栏渲染(时间控制在 bottombar, 对齐 spec §7.1)
+  renderTopbar();
+  renderBottombar();
 
   // ===== 点击交互(同步注册, 立即生效) =====
   let selectedDiv = null;

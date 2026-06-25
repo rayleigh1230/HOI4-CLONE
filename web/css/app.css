@@ -80,5 +80,9 @@ button.secondary:hover { background: #1a4a80; }
   padding: 8px; margin-bottom: 8px; font-size: 12px; }
 .combat-title { color: #e94560; font-weight: bold; margin-bottom: 4px; }
 
-/* 日志(临时,调试用) */
-#log { font-size: 11px; color: #7ec8e3; font-family: monospace; }
+/* 日志(调试反馈: 下令/换模板等操作的轻量提示, 右上角浮层) */
+#log { position: absolute; top: 54px; right: 8px; width: 240px; max-height: 140px;
+  overflow-y: auto; z-index: 7; pointer-events: none; }
+#log:empty { display: none; }
+#log { font-size: 11px; color: #7ec8e3; font-family: monospace; line-height: 1.5;
+  background: rgba(10,10,26,0.7); border-radius: 4px; padding: 4px 6px; }

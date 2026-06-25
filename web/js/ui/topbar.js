@@ -1,9 +1,8 @@
-// 顶栏: 日期 + 系统按钮组(按 router 注册表生成) + [切控制权]测试按钮 + 时间控制
+// 顶栏: 日期 + 系统按钮组(按 router 注册表生成) + [切控制权]测试按钮。
+// 对齐 spec §7.1: 时间控制移到底部命令栏(bottombar), 顶栏不再含时间按钮。
 import { h, clear } from '../core/el.js';
-import { subscribe } from '../core/store.js';
+import { subscribeKeys } from '../core/store.js';
 import { open as openPanel, names as panelNames } from '../core/router.js';
-import { doTick, toggleTime } from '../main.js';
-import { setProvinceController } from '../engine/commands.js';
 
 let controlMode = false;
 window._controlMode = false;
@@ -14,9 +13,9 @@ export function render() {
   const el = document.getElementById('topbar');
   clear(el);
 
-  // 日期显示(绑定 date 数据)
-  const dateLabel = h('span', { class: 'topbar-date' });
-  subscribe((state) => {
+  // 日期显示(路径订阅 date: 仅日期变时才更新文本)
+  const dateLabel = h('span', { class: 'topbar-date' }, '📅 --');
+  subscribeKeys(['date'], (state) => {
     const d = state?.date;
     if (d) dateLabel.textContent = `📅 ${d.y}.${d.m}.${d.d}`;
   });
@@ -30,15 +29,7 @@ export function render() {
   // 分隔
   el.append(h('span', { style: { flex: 1 } }));
 
-  // 时间控制按钮
-  const tick1Btn = h('button', { class: 'secondary', onclick: () => doTick(1) }, '▶');
-  const tick24Btn = h('button', { class: 'secondary', onclick: () => doTick(24) }, '⏩1日');
-  const autoBtn = h('button', { class: 'secondary', onclick() {
-    let running = toggleTime(); autoBtn.textContent = running ? '⏸' : '▶流逝';
-  } }, '▶流逝');
-  el.append(tick1Btn, tick24Btn, autoBtn);
-
-  // [切控制权]测试按钮(上帝模式)
+  // [切控制权]测试按钮(上帝模式, spec §7.2: 移出正式手势, 独立按钮)
   el.append(h('button', {
     class: 'secondary',
     style: { background: controlMode ? '#e94560' : '#0f3460' },
