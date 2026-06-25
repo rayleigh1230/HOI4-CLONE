@@ -1,6 +1,7 @@
-// 图层5: UI 覆盖层。选中沿多边形金色描边 + 重心标签 + 前线脉冲。对齐 spec §3.3。
+// 图层5: UI 覆盖层。选中沿多边形金色描边 + 重心标签 + 前线脉冲 + 框选矩形。
 import { provincePoly, provinceCentroid, TAG_COLORS } from './layout.js';
 import { getSelected } from './layerProvince.js';
+import { getBoxRect } from '../core/input.js';
 
 // 前线脉冲动画相位(由 main.js 的 rAF 循环更新, 见 Task 9)
 export let frontPulse = 0;
@@ -66,6 +67,20 @@ export function draw(ctx, view, { worldToScreen }) {
         }
       }
     }
+    ctx.restore();
+  }
+
+  // 框选矩形(左键拖拽时实时画)。屏幕坐标, 半透明蓝边 + 浅填充。
+  const box = getBoxRect();
+  if (box) {
+    ctx.save();
+    ctx.strokeStyle = 'rgba(126,200,227,0.9)';
+    ctx.fillStyle = 'rgba(126,200,227,0.12)';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([4, 3]);
+    ctx.fillRect(box.x0, box.y0, box.x1 - box.x0, box.y1 - box.y0);
+    ctx.strokeRect(box.x0, box.y0, box.x1 - box.x0, box.y1 - box.y0);
+    ctx.setLineDash([]);
     ctx.restore();
   }
 }

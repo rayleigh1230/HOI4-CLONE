@@ -17,3 +17,5 @@ export function h(tag, props = {}, children = []) {
   return el;
 }
 export function clear(el) { while (el.firstChild) el.removeChild(el.firstChild); }
+// 把节点插到容器最前(panel 关闭条用)
+export function prepend(parent, el) { parent.insertBefore(el, parent.firstChild); }

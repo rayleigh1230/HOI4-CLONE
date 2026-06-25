@@ -1,15 +1,16 @@
-// 面板路由: 注册 → 打开(滑入) → 关闭(滑出)。原版 country*view 的统一滑入协议。
+// 面板路由: 注册 → 打开(左侧滑入, 带关闭按钮) → 关闭(滑出)。
+// 对齐原版 country*view 统一滑入协议 + 用户反馈问题4(面板需可关闭)。
+import { h, clear, prepend } from '../core/el.js';
+
 const panels = new Map();  // name → { open(), close() }
 let current = null;
 
 const host = () => document.getElementById('panel-host');
 
-// 注册一个面板
 export function register(name, panel) {
   panels.set(name, panel);
 }
 
-// 打开指定面板(滑入), 同时关闭当前面板
 export function open(name) {
   if (current && panels.has(current)) {
     try { panels.get(current).close(); } catch (err) { console.error('[router] close error:', err); }
@@ -19,10 +20,14 @@ export function open(name) {
   if (p) {
     host().classList.add('open');
     try { p.open(); } catch (err) { console.error('[router] open error:', err); }
+    // 在面板内容顶部注入关闭按钮(面板 open() 已填充内容后, prepend 关闭条)
+    prepend(host(), h('div', { class: 'panel-close-bar' }, [
+      h('span', { class: 'panel-title', text: name }),
+      h('button', { class: 'panel-close', onclick: close, text: '✖️' }),
+    ]));
   }
 }
 
-// 关闭当前面板(滑出)
 export function close() {
   if (current && panels.has(current)) {
     try { panels.get(current).close(); } catch (err) { console.error('[router] close error:', err); }
@@ -31,7 +36,6 @@ export function close() {
   host().classList.remove('open');
 }
 
-// 所有已注册面板名(供顶栏生成按钮)
 export function names() {
   return [...panels.keys()];
 }

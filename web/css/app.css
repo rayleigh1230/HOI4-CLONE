@@ -44,12 +44,38 @@ html, body {
 #panel-host select, #panel-host input { width: 100%; background: #0a0a1a; color: #e0e0e0;
   border: 1px solid #0f3460; border-radius: 3px; padding: 6px; font-size: 13px; min-height: 44px; }
 
-/* 下令菜单: 底部弹出(选师后点省弹) */
-#order-menu { position: absolute; bottom: 56px; left: 50%; transform: translate(-50%, 100%);
+/* 下令菜单: 中下方弹出(避开底部时间控制器 bottombar 56px)。
+   对齐用户反馈问题6: 不挡时间按钮, 横向排列省纵向空间。 */
+#order-menu { position: absolute; bottom: 140px; left: 50%; transform: translate(-50%, 30%);
   background: #16213e; border: 1px solid #e94560; border-radius: 8px;
-  padding: 6px; z-index: 11; display: flex; flex-direction: column; gap: 4px; min-width: 160px;
-  transition: transform 0.2s ease; box-shadow: 0 -4px 12px rgba(0,0,0,0.5); }
-#order-menu.open { transform: translate(-50%, 0); }
+  padding: 6px; z-index: 11; display: flex; flex-direction: row; gap: 6px; flex-wrap: wrap;
+  max-width: 90vw; transition: transform 0.15s ease, opacity 0.15s ease; opacity: 0;
+  pointer-events: none; box-shadow: 0 4px 16px rgba(0,0,0,0.6); }
+#order-menu.open { transform: translate(-50%, 0); opacity: 1; pointer-events: auto; }
+#order-menu .order-title { width: 100%; text-align: center; font-size: 12px; color: #ffd700;
+  font-weight: bold; margin-bottom: 2px; }
+#order-menu button { min-height: 36px; font-size: 12px; padding: 0 10px; }
+
+/* 面板关闭条(所有左侧面板顶部, 对齐用户反馈问题4) */
+.panel-close-bar { display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 10px; border-bottom: 1px solid #0f3460; margin-bottom: 8px; position: sticky;
+  top: 0; background: #16213e; z-index: 1; }
+.panel-title { color: #e94560; font-weight: bold; font-size: 14px; }
+.panel-close { background: #0f3460; min-width: 32px; min-height: 32px; padding: 0;
+  font-size: 14px; border-radius: 4px; }
+.panel-close:hover { background: #e94560; }
+
+/* 部队卡片(选中列表/抽屉复用, 美化版, 对齐问题5) */
+.div-card { background: #0a0a1a; border-left: 4px solid #0f3460; border-radius: 6px;
+  padding: 10px; margin: 8px 0; transition: transform 0.1s; }
+.div-card:hover { transform: translateX(2px); }
+.div-card.attacker { border-left-color: #e94560; }
+.div-card.defender { border-left-color: #16c79a; }
+.div-card-hd { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.div-sym { font-size: 18px; width: 22px; text-align: center; }
+.bars-row { display: flex; gap: 6px; margin: 4px 0; }
+.bars-row .mini-bar { flex: 1; }
+.div-stats { font-size: 10px; color: #9ab; font-family: monospace; margin-top: 4px; }
 
 /* 按钮: 触屏友好 44px 最小目标 */
 button { background: #e94560; color: white; border: none; border-radius: 4px;

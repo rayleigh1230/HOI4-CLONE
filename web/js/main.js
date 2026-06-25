@@ -14,7 +14,8 @@ import * as overlay from './map/layerOverlay.js';
 import { init as initDeploy } from './views/deployPanel.js';
 import { init as initDiplo } from './views/diplomacyPanel.js';
 import { init as initUnitPanel } from './views/unitPanel.js';
-import { init as initCombat } from './views/combatPanel.js';
+import { init as initCombat, openBattle } from './views/combatPanel.js';
+import { init as initSelection, showSelection } from './views/selectionPanel.js';
 import * as drawer from './ui/drawer.js';
 import * as orderMenu from './ui/orderMenu.js';
 import { render as renderTopbar } from './ui/topbar.js';
@@ -22,12 +23,13 @@ import { render as renderBottombar } from './ui/bottombar.js';
 import { statbar } from './ui/statbar.js';
 import { h } from './core/el.js';
 import { setProvinceController } from './engine/commands.js';
-import { provinceAt } from './map/layout.js';
+import { provinceAt, provinceCentroid } from './map/layout.js';
 import { selectProvince } from './map/layerProvince.js';
 import * as combatLayer from './map/layerCombat.js';
+import * as unitLayer from './map/layerUnit.js';
 import { setFrontPulse } from './map/layerOverlay.js';
 import { setCombatPulse } from './map/layerCombat.js';
-import { open as openPanel } from './core/router.js';
+import { open as openPanel, close as closePanel } from './core/router.js';
 
 // ===== tick 循环 + store 刷新 =====
 let autoTimer = null;
@@ -94,40 +96,84 @@ async function main() {
   initDiplo();
   initUnitPanel();
   initCombat();
+  initSelection();
 
   // 顶栏 + 底栏渲染(时间控制在 bottombar, 对齐 spec §7.1)
   renderTopbar();
   renderBottombar();
 
   // ===== 点击交互(同步注册, 立即生效) =====
-  let selectedDiv = null;
+  let selectedDiv = null;   // 当前选中师(用于"选师→点省下令")
   let deployTarget = null;
 
   // 部署全局入口(给 deployPanel 用)
   window._deployTemplate = (tmpl) => { deployTarget = tmpl; };
 
+  // ESC: 关闭所有浮层(面板/抽屉/命令菜单/取消选师)。对齐用户反馈问题4。
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      orderMenu.hide();
+      drawer.close();
+      closePanel();
+      selectedDiv = null;
+      unitLayer.clearSelection();
+      refresh();
+    }
+  });
+
+  // 取某师牌子的屏幕包围矩形(与 layerUnit 绘制位置一致: 重心上方28*zoom, 76×24)
+  function divCardRect(d, view, zoom) {
+    const c = provinceCentroid(d.loc);
+    if (!c) return null;
+    const sc = canvas.worldToScreen(c);
+    const w = 76 * zoom, h = 24 * zoom;
+    return { x: sc.x - w / 2, y: sc.y - 28 * zoom - h / 2, w, h, div: d };
+  }
+
   input.onHit((wp, sx, sy) => {
     const view = store.state;
     if (!view?.provinces?.length) return false;
-    const ids = view.provinces.map(p => p.id);
-
-    // 命中优先级 1: 战斗图标(点击开战斗面板)。对齐 spec §5.4
     const cam = canvas.getCamera();
-    const icons = combatLayer.combatIcons(view, (p) => canvas.worldToScreen(p), cam.zoom);
+    const zoom = cam.zoom;
+
+    // 命中优先级 1: 战斗图标 → 左侧出该战斗详情框(不跳路由列表)。对齐问题3。
+    const icons = combatLayer.combatIcons(view, (p) => canvas.worldToScreen(p), zoom);
     for (const ic of icons) {
       if (Math.hypot(ic.x - sx, ic.y - sy) <= ic.r) {
-        openPanel('交战');
+        drawer.close(); orderMenu.hide();
+        openBattle(ic.battleId, view);
         return true;
       }
     }
 
-    // 命中优先级 2: 省份多边形(pointInPolygon)。对齐 spec §3.4
+    // 命中优先级 2: 师牌子(点牌 = 选中师)。对齐问题1(点省/点师区分)。
+    const divs = view.divisions || [];
+    for (const d of divs) {
+      const r = divCardRect(d, view, zoom);
+      if (r && sx >= r.x && sx <= r.x + r.w && sy >= r.y && sy <= r.y + r.h) {
+        selectedDiv = d.id;
+        unitLayer.selectDivision(d.id);
+        orderMenu.hide();
+        drawer.open([
+          h('h3', { text: `🎖 ${d.owner} 师#${d.id}` }),
+          h('div', { class: 'div-card ' + (d.owner === 'GER' ? 'attacker' : 'defender') }, [
+            h('div', { text: d.template || '(无模板)', style: { fontWeight: 'bold', marginBottom: '4px' } }),
+            statbar(d.org, d.max_org, d.str, d.max_str, d.eq_ratio, d.mp_ratio),
+            h('div', { text: `📍省${d.loc}  点击他省下令`, style: { fontSize: '11px', color: '#7ec8e3', marginTop: '6px' } }),
+          ]),
+        ]);
+        refresh();
+        return true;
+      }
+    }
+
+    // 命中优先级 3: 省份多边形(pointInPolygon)。对齐 spec §3.4
+    const ids = view.provinces.map(p => p.id);
     const best = provinceAt(wp, ids);
     if (best == null) return false;
 
     // 上帝模式(切控制权)
-    const ctrlMode = window._controlMode || false;
-    if (ctrlMode) {
+    if (window._controlMode) {
       const p = view.provinces.find(x => x.id === best);
       if (p) { setProvinceController(best, p.controller === 'GER' ? 'FRA' : 'GER'); refresh(); }
       return true;
@@ -142,36 +188,68 @@ async function main() {
       return true;
     }
 
-    // 已选师 → 点省弹命令菜单
+    // 已选师 → 点省弹命令菜单(下令后菜单自动消失, orderMenu 内部 hide)。对齐问题6。
     if (selectedDiv) {
       orderMenu.show(selectedDiv, best);
-      selectedDiv = null;
+      refresh();
       return true;
     }
 
-    // 选师或弹抽屉
-    const divs = view.divisions?.filter(d => d.loc === best) || [];
+    // 点空省 → 只选中省(金色描边), 弹轻量省信息抽屉(不自动选师)
     const p = view.provinces.find(x => x.id === best);
+    const provDivs = view.divisions?.filter(d => d.loc === best) || [];
     selectProvince(best);
-    if (divs.length > 0) {
-      selectedDiv = divs[0].id;
-      drawer.open([
-        h('h3', { text: `📍 省${best} [${p?.controller || '?'}]` }),
-        ...divs.map(d =>
-          h('div', { class: 'div-card ' + (d.owner === 'GER' ? 'attacker' : 'defender') }, [
-            h('div', { text: `${d.owner} 师#${d.id} ${d.template || ''}`, style: { fontWeight: 'bold', marginBottom: '4px' } }),
-            statbar(d.org, d.max_org, d.str, d.max_str, d.eq_ratio, d.mp_ratio),
-          ])
-        ),
-      ]);
-    } else {
-      drawer.open(h('h3', { text: `📍 省${best} [${p?.controller || '?'}] — 无部队` }));
-    }
+    unitLayer.clearSelection();
+    drawer.open([
+      h('h3', { text: `📍 省${best} [${p?.controller || '?'}]` }),
+      provDivs.length > 0
+        ? h('div', { text: `驻军 ${provDivs.length} 个师 — 点地图部队牌选中`, style: { fontSize: '12px', color: '#9ab' } })
+        : h('div', { text: '无部队驻扎', style: { fontSize: '12px', color: '#9ab' } }),
+    ]);
     refresh();
     return true;
   });
 
-  input.onBackground(() => { selectedDiv = null; drawer.close(); refresh(); });
+  input.onBackground(() => {
+    selectedDiv = null;
+    unitLayer.clearSelection();
+    drawer.close();
+    orderMenu.hide();
+    refresh();
+  });
+
+  // 框选(左键拖拽): 算框住的师 → 左侧出部队列表面板。对齐用户反馈问题2。
+  input.onBoxSelect((rect) => {
+    const view = store.state;
+    if (!view?.divisions?.length) return false;
+    const cam = canvas.getCamera();
+    const zoom = cam.zoom;
+    // 框选矩形是屏幕坐标, 师牌子也用屏幕坐标判断是否相交
+    const selected = [];
+    for (const d of view.divisions) {
+      const r = divCardRect(d, view, zoom);
+      if (!r) continue;
+      // 牌子中心在框内, 或牌子与框相交 → 选中
+      const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
+      if (cx >= rect.x0 && cx <= rect.x1 && cy >= rect.y0 && cy <= rect.y1) {
+        selected.push(d);
+      }
+    }
+    // 关闭其他浮层
+    drawer.close();
+    orderMenu.hide();
+    if (selected.length > 0) {
+      showSelection(selected, (divId) => {
+        // 点列表里某师 → 选中它(回地图下令)
+        selectedDiv = divId;
+        unitLayer.selectDivision(divId);
+        refresh();
+      });
+    } else {
+      closePanel();
+    }
+    return true;
+  });
 
   // 初始化场景(新基础构造: create_state + create_province state= + 显式 declare_war)
   setPlayer('GER');
