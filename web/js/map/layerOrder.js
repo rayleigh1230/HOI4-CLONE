@@ -1,13 +1,15 @@
 // 图层3: 命令箭头(进攻/行军/支援/航点, 多段折线+车道偏移)
-import { provincePos } from './layout.js';
+import { provinceCentroid } from './layout.js';
 
 export function draw(ctx, view, { worldToScreen, W, H }) {
   const { divisions, provinces } = view;
   if (!provinces?.length || !divisions) return;
 
-  const ids = provinces.map(p => p.id);
   const pos = {};
-  for (const p of provinces) pos[p.id] = worldToScreen(provincePos(p.id, ids, W, H));
+  for (const p of provinces) {
+    const c = provinceCentroid(p.id);
+    pos[p.id] = worldToScreen(c);
+  }
 
   for (const d of divisions) {
     const bx = pos[d.loc]?.x || 0;
