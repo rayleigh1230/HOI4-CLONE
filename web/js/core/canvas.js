@@ -71,7 +71,7 @@ export function screenToWorld(p) {
 // 获取相机状态(图层可读)
 export function getCamera() { return { ...camera }; }
 
-// 渲染: 每帧调一次, 传入 viewModel。只重绘脏层或全层。
+// 渲染: 每帧调一次, 传入 viewModel。始终全层重绘(dirty 优化留后续大数据时)。
 export function render(view) {
   if (!ctx) return;
   const W = canvasEl.clientWidth, H = canvasEl.clientHeight;
@@ -79,12 +79,8 @@ export function render(view) {
   ctx.clearRect(0, 0, W, H);
 
   for (const l of layers) {
-    if (fullRedraw || l.dirty) {
-      ctx.save();
-      l.draw(ctx, view, { worldToScreen, camera, W, H });
-      ctx.restore();
-      l.dirty = false;
-    }
+    ctx.save();
+    l.draw(ctx, view, { worldToScreen, camera, W, H });
+    ctx.restore();
   }
-  fullRedraw = false;
 }
