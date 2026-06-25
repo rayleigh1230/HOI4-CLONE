@@ -144,17 +144,31 @@ async function main() {
       }
     }
 
+    // 命中优先级 1.5: 兵牌点击(显示师信息)。敌师不可下令但可查看; player 师此处仅兜底显示。
+    for (const d of (view.divisions || [])) {
+      const r = divCardRect(d, view, zoom);
+      if (r && sx >= r.x && sx <= r.x + r.w && sy >= r.y && sy <= r.y + r.h) {
+        drawer.close(); orderMenu.hide();
+        const player = view.player || '';
+        const mine = d.owner === player;
+        drawer.open([
+          h('h3', { text: `🎖 ${d.owner} 师#${d.id}${mine ? '' : ' (非己方)'}` }),
+          h('div', { class: 'div-card ' + (d.owner === 'GER' ? 'attacker' : 'defender') }, [
+            h('div', { text: d.template || '(无模板)', style: { fontWeight: 'bold', marginBottom: '4px' } }),
+            statbar(d.org, d.max_org, d.str, d.max_str, d.eq_ratio, d.mp_ratio),
+            h('div', { text: mine ? `📍省${d.loc}  拖拽兵牌到他省下令` : `📍省${d.loc}  (敌军, 不可下令)`,
+              style: { fontSize: '11px', color: mine ? '#7ec8e3' : '#e94560', marginTop: '6px' } }),
+          ]),
+        ]);
+        refresh();
+        return true;
+      }
+    }
+
     // 命中优先级 2: 省份多边形(pointInPolygon)。兵牌交互归拖拽(onDownCheck/onDragEnd), 不在此处理。
     const ids = view.provinces.map(p => p.id);
     const best = provinceAt(wp, ids);
     if (best == null) return false;
-
-    // 上帝模式(切控制权)
-    if (window._controlMode) {
-      const p = view.provinces.find(x => x.id === best);
-      if (p) { setProvinceController(best, p.controller === 'GER' ? 'FRA' : 'GER'); refresh(); }
-      return true;
-    }
 
     // 部署模式
     if (deployTarget) {
@@ -196,13 +210,15 @@ async function main() {
     const view = store.state;
     if (!view?.divisions?.length) return null;
     const cam = canvas.getCamera();
+    const player = view.player || '';
     for (const d of view.divisions) {
       const r = divCardRect(d, view, cam.zoom);
       if (r && sx >= r.x && sx <= r.x + r.w && sy >= r.y && sy <= r.y + r.h) {
-        // 命中兵牌: 选中该师(拖拽下令的就是它; 未移动松开则保持选中)
+        const canCommand = (d.owner === player);  // 国家视角: 只能下令自己的师
+        // 选中该师(可视化高亮); canCommand 决定能否拖拽下令
         selectedDiv = d.id;
         unitLayer.selectDivision(d.id);
-        return { divId: d.id };
+        return { divId: d.id, canCommand };
       }
     }
     return null;

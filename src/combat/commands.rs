@@ -16,6 +16,20 @@ fn num_of(a: &Arg) -> Result<f64, CmdError> {
     a.as_num().ok_or_else(|| CmdError::RuntimeError(format!("期望数字, 得 {:?}", a)))
 }
 
+/// 国家视角权限校验(对齐原版单国家控制): 玩家只能下令 player_tag 国家的师。
+/// 返回 true = 玩家控制该师(可下令); false = 非玩家师(拒绝下令)。
+/// 玩家未设置(player_tag 空, 如 CLI/测试)时放行(向后兼容)。
+fn player_controls(world: &crate::runtime::World, div_id: u64) -> bool {
+    let player = &world.player_tag;
+    if player.is_empty() {
+        return true; // 无玩家设定(CLI/测试), 不限制
+    }
+    match world.divisions.get(&div_id) {
+        Some(d) => d.owner_tag == *player,
+        None => false,
+    }
+}
+
 /// 从汇总属性构建 Division(新路径: 数据驱动)
 /// template: Some(name) = 数据驱动建师(记模板引用); None = 旧路径(无模板)
 fn build_division_from_stats(owner: &str, loc: u32, stats: DivisionStats, template: Option<&str>) -> Division {
@@ -341,6 +355,10 @@ pub fn register(reg: &mut Registry) {
             Some(d) => (d.owner_tag.clone(), d.location_province),
             None => return Err(CmdError::RuntimeError(format!("move_division: 师 {div_id} 不存在"))),
         };
+        // 国家视角校验: 只能下令玩家自己的师(对齐原版单国家控制)
+        if !player_controls(w, div_id) {
+            return Ok(()); // 非玩家师, 静默拒绝
+        }
         // 防守主动撤退判定(规则4: 撤退只去邻近省份):
         // 师当前在战斗地块 + 目标是相邻的己方控制省 → 撤退
         let on_battle_province = w.battles.iter().any(|b| b.province == cur_loc);
@@ -412,6 +430,10 @@ pub fn register(reg: &mut Registry) {
     reg.register("support_attack", |w, p| {
         let div_id = num_of(np(p, "support_attack", "division")?)? as u64;
         let target = num_of(np(p, "support_attack", "target")?)? as u32;
+        // 国家视角校验
+        if !player_controls(w, div_id) {
+            return Ok(());
+        }
         // 【决策13】邻接检查: 目标省须与师 location 相邻, 否则静默无效
         let cur_loc = match w.divisions.get(&div_id) {
             Some(d) => d.location_province,
@@ -449,6 +471,10 @@ pub fn register(reg: &mut Registry) {
     // - Idle/Pending(纯防守/撤退变攻方)→ 忽略(无主动指令可停)
     reg.register("stop_order", |w, p| {
         let div_id = num_of(np(p, "stop_order", "division")?)? as u64;
+        // 国家视角校验
+        if !player_controls(w, div_id) {
+            return Ok(());
+        }
         // 读取判断(单独作用域, 释放借用后再 get_mut)
         let should_stop = {
             let Some(d) = w.divisions.get(&div_id) else { return Ok(()); };
@@ -475,6 +501,10 @@ pub fn register(reg: &mut Registry) {
     reg.register("queue_move", |w, p| {
         let div_id = num_of(np(p, "queue_move", "division")?)? as u64;
         let target = num_of(np(p, "queue_move", "target")?)? as u32;
+        // 国家视角校验(先于读取, 避免无效借用)
+        if !player_controls(w, div_id) {
+            return Ok(());
+        }
         // 读当前 location + owner(释放借用)
         let (cur_loc, owner) = match w.divisions.get(&div_id) {
             Some(d) => (d.location_province, d.owner_tag.clone()),

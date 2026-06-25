@@ -183,6 +183,37 @@ const orderText = await page.locator('#order-menu').innerText();
 check('拖拽兵牌到省弹命令菜单', orderOpen && /进军|航点|支援/.test(orderText), 'open=' + orderOpen + ' text=' + orderText.slice(0, 30));
 await page.keyboard.press('Escape');  // 清理
 
+// 6b3. 国家视角权限: 拖拽敌师不应弹命令菜单(不可下令)
+const permCam = await page.evaluate(() => {
+  const W = innerWidth, H = innerHeight, m = 20, WW = 1000, WH = 700;
+  const z = Math.min((W - m * 2) / WW, (H - m * 2) / WH);
+  return { z, camX: W / 2 - WW / 2 * z, camY: H / 2 - WH / 2 * z };
+});
+const enemyDiv = await page.evaluate(() => {
+  const player = window._store.state.player;
+  return window._store.state.divisions.find(d => d.owner !== player);
+});
+if (enemyDiv) {
+  const col = enemyDiv.loc <= 5 ? enemyDiv.loc : enemyDiv.loc - 5;
+  const row = enemyDiv.loc <= 5 ? 0 : 1;
+  const fromX = (col - 0.5) * 200 * permCam.z + permCam.camX;
+  const fromY = ((row === 0 ? 195 : 505) - 28) * permCam.z + permCam.camY;
+  const toX = 0.5 * 200 * permCam.z + permCam.camX;
+  const toY = 505 * permCam.z + permCam.camY;
+  await page.mouse.move(fromX, fromY); await page.mouse.down();
+  await page.mouse.move(toX, toY, { steps: 8 }); await page.waitForTimeout(150);
+  await page.mouse.up(); await page.waitForTimeout(400);
+  const orderOpen2 = await page.locator('#order-menu').evaluate(el => el.classList.contains('open'));
+  const enemyLocAfter = await page.evaluate(() => {
+    const player = window._store.state.player;
+    const d = window._store.state.divisions.find(x => x.owner !== player);
+    return d ? d.loc : null;
+  });
+  check('国家视角: 拖拽敌师不可下令', !orderOpen2 && enemyLocAfter === enemyDiv.loc,
+    `menu=${orderOpen2} loc=${enemyDiv.loc}→${enemyLocAfter}`);
+  await page.keyboard.press('Escape');
+}
+
 // 6c. 多边形地形渲染: 采样含地形绿色调像素(spec §3.1)
 const terrainCheck = await page.locator('#map').evaluate(c => {
   const ctx = c.getContext('2d');

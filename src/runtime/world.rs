@@ -402,6 +402,31 @@ mod tests {
         assert!((d.strength - 100.0).abs() < 1e-9, "换模板应保留 strength, 实际 {}", d.strength);
     }
 
+    #[test]
+    fn t_player_cannot_order_foreign_division() {
+        // 国家视角: 玩家(GER)不能下令敌国(FRA)的师。
+        let mut w = run_script_world(&[
+            "create_state = { id = 1 owner = GER }",
+            "create_state = { id = 2 owner = FRA }",
+            "create_province = { id = 1 state = 1 neighbors = { 2 } }",
+            "create_province = { id = 2 state = 2 neighbors = { 1 } }",
+            "create_division = { owner = FRA location = 2 template = \"Division d'Infanterie\" }",
+        ]);
+        w.player_tag = "GER".into();  // 玩家是 GER
+        let fra_div = w.divisions.values().next().map(|d| d.id).expect("应有 FRA 师");
+        let loc_before = w.divisions.get(&fra_div).unwrap().location_province;
+        // GER 玩家试图下令 FRA 师 → 应被拒绝(静默, 师不动)
+        run_script_world_on(&mut w, &format!("move_division = {{ division = {fra_div} target = 1 }}"));
+        let loc_after = w.divisions.get(&fra_div).unwrap().location_province;
+        assert_eq!(loc_before, loc_after, "玩家不能下令敌国师, FRA 师应保持原位");
+        // 但 GER 玩家能下令自己的师(无 player_tag 限制时也放行)
+        run_script_world_on(&mut w, "create_division = { owner = GER location = 1 template = \"Infanterie-Division\" }");
+        let ger_div = w.divisions.values().find(|d| d.owner_tag == "GER").map(|d| d.id).unwrap();
+        run_script_world_on(&mut w, &format!("move_division = {{ division = {ger_div} target = 2 }}"));
+        let ger_order = format!("{:?}", w.divisions.get(&ger_div).unwrap().order);
+        assert!(ger_order.contains("Moving"), "玩家应能下令自己的师, 实际 {ger_order}");
+    }
+
     /// 辅助: 在已有 World 上跑单个脚本(原地修改)
     fn run_script_world_on(w: &mut World, script: &str) {
         use crate::ast::lower::lower_effects;

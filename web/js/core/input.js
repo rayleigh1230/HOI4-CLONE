@@ -43,11 +43,11 @@ function onDown(e) {
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, pointerType: e.pointerType });
   if (pointers.size === 1) {
     lastSingle = { x: e.clientX, y: e.clientY, moved: false, button: e.button, pointerType: e.pointerType };
-    // 桌面左键: 先问 main.js 是否命中兵牌 → 决定下令 vs 平移
+    // 桌面左键: 先问 main.js 是否命中兵牌 → 命中且可下令才进入拖拽下令模式
     if (e.pointerType !== 'touch' && e.button === 0) {
       const rect = document.getElementById('map').getBoundingClientRect();
       const hit = runDownCheck(e.clientX - rect.left, e.clientY - rect.top);
-      if (hit && hit.divId != null) {
+      if (hit && hit.divId != null && hit.canCommand) {
         dragOrder = { fromScreen: { x: e.clientX - rect.left, y: e.clientY - rect.top }, fromDiv: hit.divId };
       }
     }
