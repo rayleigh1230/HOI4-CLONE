@@ -1,7 +1,7 @@
 # hoi4-clone 项目交接文档
 
 > **用途**: 在新会话中继续开发。读本文件 + 列出的关键文件即可接上。
-> **更新**: 2026-06-25(基础构造层完成 — 数据驱动+modifier+State+日期+战争, 进入 demo 完善阶段)
+> **更新**: 2026-06-25(demo 彻底改造完成 — 地图全屏+浮层/绑定式数据流/触屏适配/模板引用, 前端 25 文件 1166 行)
 
 ---
 
@@ -34,6 +34,7 @@
 | **State 概念** | 省份上级容器(归属从State派生 + 法理vs控制 + state_loader) | 168 |
 | **日期系统** | GameDate 精确公历(闰年/月份天数) + World.date()派生 + clock月切换修正 | 177 |
 | **战争状态** | War关系(are_at_war判定) + 阵营自动拉入 + 敌人判定改造 | 180 |
+| **demo 彻底改造** | 地图全屏+浮层/绑定式数据流/触屏/模板引用/ change_template/ 6图层Canvas / ES Module 四层架构 | 122+UI |
 
 ### 基础构造层(本阶段, 2026-06-24~25)
 
@@ -142,7 +143,15 @@ src/
 ├── wasm_api.rs       WASM桥接(序列化省份controller/owner从State派生读)
 └── lib.rs / main.rs
 web/
-└── index.html        UI(部署面板+Canvas节点图+交战视窗+弹菜单+状态条+进度箭头)
+├── index.html              # 入口: 地图全屏 + 顶栏/底栏/抽屉/面板宿主
+├── css/app.css             # 移动优先全屏布局 + 组件样式
+└── js/                     # 25 文件 1166 行, ES Modules, 无构建
+    ├── main.js             # 启动: 装配 + 两段式交互 + 完整 setup
+    ├── engine/             # WASM 封装(wasm/state/commands)
+    ├── core/               # 通用框架(store/bind/router/canvas/input/el)
+    ├── map/                # 6 图层(layout+terrain/province/unit/order/combat/overlay)
+    ├── ui/                 # 复用组件(topbar/drawer/orderMenu/statbar)
+    └── views/              # 面板内容(deploy/diplo/unit/combat)
 docs/
 ├── design-principles.md  ★复刻设计原则(原版是首要参考)
 ├── formulas/land-combat.md  陆战公式(四量模型/防御池/装甲/宽度)
@@ -197,14 +206,9 @@ docs/
 - **已有**: 师部署 + 移动/进军/支援攻击/停止命令 + 战斗可视化
 - **缺口**: demo 还用旧脚本(create_division battalions, 未接 create_state/template/declare_war); 数据驱动/State/战争的新能力未在 UI 体现
 
-### 下阶段优先级建议
-
-1. **demo 接入新基础构造**: create_state + create_province(state引用) + declare_war + create_division(template); 让 demo 用真实数据驱动的师 + 真实战争关系
-2. **实际测试暴露问题**: 跑几局完整对战, 看架构在真实场景有什么 bug(借用冲突/数值偏差/状态机边界)
-3. **根据测试结果修 bug**: 基础构造层的问题优先修(它们影响所有后续系统)
-4. **补数据文件**: 当前只拷了部分原版数据(营/装备/State 子集), 补全让德国模板完整
-
 ### 未实现系统(按优先级, 供后续选择)
+
+| 系统 | 依赖的地基(都已就位) | 复杂度 |
 
 | 系统 | 依赖的地基(都已就位) | 复杂度 |
 |---|---|---|
