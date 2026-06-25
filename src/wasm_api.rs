@@ -541,7 +541,7 @@ fn serialize_state(world: &World) -> String {
         }
     }
     s.push_str("}");
-    s.push_str("]}");
+    s.push_str("}");
     s
 }
 
