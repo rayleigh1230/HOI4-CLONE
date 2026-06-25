@@ -8,6 +8,7 @@ impl GameClock {
     /// 注: 用 % 而非 is_multiple_of, 保持对 Rust <1.87 的兼容(Cargo.toml 未钉版本)
     #[allow(clippy::manual_is_multiple_of)]
     pub fn tick(interp: &Interpreter, world: &mut World) {
+        let prev_month = world.date().month;  // tick 前月份(用于精确月切换)
         world.hour += 1;
         world.started = true; // 首次 tick 后游戏开始(部署阶段结束)
         world.fire_event(interp, "on_hourly");
@@ -25,7 +26,8 @@ impl GameClock {
         if world.hour % (24 * 7) == 0 {
             world.fire_event(interp, "on_weekly");
         }
-        if world.hour % (24 * 30) == 0 {
+        // 月切换: 比对月份变化(不用 % 30, 因为月份天数不固定: 2月28天、7月31天)
+        if world.date().month != prev_month {
             world.fire_event(interp, "on_monthly");
         }
     }

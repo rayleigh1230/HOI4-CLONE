@@ -1,6 +1,7 @@
 //! World: 游戏状态(M3: 加实体存储 + 作用域栈)
 use crate::ast::Effect;
 use crate::data::GameData;
+use crate::runtime::date::GameDate;
 use crate::runtime::entities::{Battle, Country, Division, Province, Scope, State};
 use crate::runtime::error::CmdError;
 use std::collections::HashMap;
@@ -123,6 +124,18 @@ impl World {
             .filter(|d| d.owner_tag == tag)
             .map(|d| d.id)
             .collect()
+    }
+
+    // ===== 日期派生(从 hour 算, 不存状态) =====
+
+    /// 当前游戏日期(从 hour 派生)
+    pub fn date(&self) -> GameDate {
+        GameDate::from_hours(self.hour)
+    }
+
+    /// 从开局起经过的总天数(用于"N 天后"判定)
+    pub fn total_days(&self) -> u64 {
+        self.hour / 24
     }
 
     // ===== State 派生查询(Province 归属从 State 派生) =====

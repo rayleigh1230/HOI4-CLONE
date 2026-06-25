@@ -1,5 +1,6 @@
 //! 运行时模块
 pub mod clock;
+pub mod date;
 pub mod entities;
 pub mod error;
 pub mod interp;
@@ -8,6 +9,7 @@ pub mod world;
 
 pub use clock::GameClock;
 pub use crate::data::GameData;
+pub use date::GameDate;
 pub use entities::{Battle, Country, Division, Province, Scope, State};
 pub use error::CmdError;
 pub use interp::Interpreter;
