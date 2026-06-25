@@ -207,10 +207,13 @@ pub unsafe extern "C" fn engine_supply(owner_ptr: *const u8, owner_len: usize) {
     ENGINE.with(|e| {
         let mut e = e.borrow_mut();
         let Engine { interp, world } = &mut *e;
-        // 自动补足装备(各5000)和人力(50000), 简化部署
+        // 自动补足装备(demo 用到的营 need 的装备类型)和人力, 简化部署。
+        // 对齐营 need: infantry→infantry_equipment, light_armor→light_tank_chassis,
+        //              artillery→artillery_equipment。原误补 medium_tank(无营引用)。
         let script = format!(
             "add_equipment = {{ owner = {owner} type = infantry_equipment amount = 5000 }}
-            add_equipment = {{ owner = {owner} type = medium_tank amount = 5000 }}
+            add_equipment = {{ owner = {owner} type = light_tank_chassis amount = 5000 }}
+            add_equipment = {{ owner = {owner} type = artillery_equipment amount = 5000 }}
             add_manpower = {{ owner = {owner} amount = 500000 }}"
         );
         if let Ok(b) = crate::parser::parse(&script) {

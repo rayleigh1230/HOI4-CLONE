@@ -180,12 +180,9 @@ fn parse_block(cur: &mut Cursor, expect_rbrace: bool) -> Result<Block, ParseErro
                 };
                 fields.push(Field { key, value });
             }
-            other => {
-                return Err(ParseError::Syntax {
-                    line: 0,
-                    msg: format!("意外的 token: {other:?}"),
-                })
-            }
+            // 注: 此处曾有一个 other => 兜底分支, 但前面 key_token => 已是全兜底模式,
+            // 使其不可达(rustc unreachable_patterns 警告)。已删除该 dead code。
+            // 意外 token 的错误由 key_token 分支内的逻辑 / 上层 parse 调用者处理。
         }
     }
     if expect_rbrace {
