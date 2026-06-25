@@ -369,6 +369,38 @@ mod tests {
         assert!(!w.data.sub_units.is_empty(), "应含营定义");
     }
 
+    #[test]
+    fn t_country_default_resources() {
+        // Country 默认资源: PP=0, stability=0.5, war_support=0.5(对齐原版 BASE_*)
+        let c = crate::runtime::Country::default();
+        assert!((c.political_power - 0.0).abs() < 1e-9);
+        assert!((c.stability - 0.5).abs() < 1e-9, "默认稳定度应 0.5");
+        assert!((c.war_support - 0.5).abs() < 1e-9, "默认战争支持度应 0.5");
+    }
+
+    #[test]
+    fn t_effective_stability_clamp_and_buffer() {
+        // effective = clamp(base × mult, 0, 1); 无 modifier 时 = base
+        let mut c = crate::runtime::Country::default();
+        c.stability = 0.7;
+        assert!((c.effective_stability() - 0.7).abs() < 1e-9, "无修正时 effective=base");
+        // base 超 1.0: effective 应 clamp 到 1.0, buffer 保留超额
+        c.stability = 1.5;
+        assert!((c.effective_stability() - 1.0).abs() < 1e-9, "应 clamp 到 1.0");
+        assert!((c.stability_buffer() - 0.5).abs() < 1e-9, "buffer 应保留超额 0.5");
+    }
+
+    #[test]
+    fn t_country_has_per_instance_resources() {
+        // 核心验收: 两个 Country 的资源互不影响(国家级化, 非全局)
+        let mut a = crate::runtime::Country::default();
+        a.political_power = 100.0;
+        let mut b = crate::runtime::Country::default();
+        b.political_power = 50.0;
+        assert!((a.political_power - 100.0).abs() < 1e-9);
+        assert!((b.political_power - 50.0).abs() < 1e-9, "两国 PP 应独立");
+    }
+
     /// 辅助: 用 Registry + Interpreter 跑脚本, 返回 World(命令测试用)
     fn run_script_world(scripts: &[&str]) -> World {
         use crate::ast::lower::lower_effects;
