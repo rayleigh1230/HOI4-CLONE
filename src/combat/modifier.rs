@@ -157,11 +157,8 @@ impl CombatContext {
             if let Some(c) = world.countries.get(&d.owner_tag) {
                 stack.merge(&c.modifiers);
             }
-            // 省份层: 地形(静态查表)
-            if let Some(p) = world.provinces.get(&battle.province) {
-                stack.merge(&terrain_modifiers(&p.terrain));
-                // 后续昼夜: stack.merge(&night_modifier(world.darkness[battle.province]))
-            }
+            // 省份层: 地形攻方惩罚不进此通用 stack(只作用于攻方, 见 AtkStats::from)。
+            // 后续昼夜 modifier(night × darkness)在此 merge(昼夜对攻守都生效)。
             // 师自身: 堑壕/计划/经验
             stack.merge(&d.modifiers);
             stacks.insert(*div_id, stack);
@@ -180,11 +177,34 @@ impl CombatContext {
     }
 }
 
-/// 地形 modifier 查表(占位: 本次返回空栈, 无地形数据)
-/// 后续地形系统实现时, 按 terrain 名返回真实修正(森林 attack -0.15 等)
-/// 夜间修正(night modifier × darkness)后续也走这里, 详见 spec §3.4。
-pub fn terrain_modifiers(_terrain: &str) -> ModifierStack {
-    ModifierStack::new()
+/// 地形攻方惩罚系数(0.0-1.0, 越低惩罚越重)。
+/// 原版 terrain.txt: 攻方在恶劣地形 soft/hard_attack 打折, 守方不受影响(享受地形优势)。
+/// plains/desert 1.0(无惩罚) / forest jungle 0.80(-20%) / hills 0.70(-30%) /
+/// marsh urban 0.60(-40%) / mountain 0.40(-60%)。
+/// 用于 AtkStats::from 攻方快照(只乘攻方, 不进 CombatContext 通用 stack)。
+pub fn terrain_attacker_penalty(terrain: &str) -> f64 {
+    match terrain {
+        "plains" | "desert" => 1.0,
+        "forest" | "jungle" => 0.80,
+        "hills" => 0.70,
+        "marsh" | "urban" => 0.60,
+        "mountain" => 0.40,
+        _ => 1.0, // 未知地形回退平原(无惩罚)
+    }
+}
+
+/// 地形战斗宽度(每种地形基础宽度不同; 原版 terrain.txt combat_width)。
+/// plains/desert/hills 70 / forest/jungle 60 / marsh 54 / mountain 50 / urban 80。
+/// 多方向加宽(每多一进攻方向 +base/2)本次不做(YAGNI, demo 单方向), 留 TODO。
+pub fn terrain_combat_width(terrain: &str) -> f64 {
+    match terrain {
+        "plains" | "desert" | "hills" => 70.0,
+        "forest" | "jungle" => 60.0,
+        "marsh" => 54.0,
+        "mountain" => 50.0,
+        "urban" => 80.0,
+        _ => 70.0, // 未知地形回退平原
+    }
 }
 
 #[cfg(test)]
@@ -362,5 +382,30 @@ mod tests {
         };
         let ctx = CombatContext::build(&w, &battle);
         assert!(ctx.get(999).is_empty());
+    }
+
+    #[test]
+    fn t_terrain_attacker_penalty_values() {
+        // 攻方惩罚系数(对齐原版 terrain.txt): 越恶劣越低
+        assert!((terrain_attacker_penalty("plains") - 1.0).abs() < 1e-9, "平原无惩罚");
+        assert!((terrain_attacker_penalty("desert") - 1.0).abs() < 1e-9);
+        assert!((terrain_attacker_penalty("forest") - 0.80).abs() < 1e-9, "森林-20%");
+        assert!((terrain_attacker_penalty("jungle") - 0.80).abs() < 1e-9);
+        assert!((terrain_attacker_penalty("hills") - 0.70).abs() < 1e-9, "丘陵-30%");
+        assert!((terrain_attacker_penalty("marsh") - 0.60).abs() < 1e-9, "沼泽-40%");
+        assert!((terrain_attacker_penalty("urban") - 0.60).abs() < 1e-9);
+        assert!((terrain_attacker_penalty("mountain") - 0.40).abs() < 1e-9, "山地-60%最重");
+        assert!((terrain_attacker_penalty("unknown_xyz") - 1.0).abs() < 1e-9, "未知回退平原");
+    }
+
+    #[test]
+    fn t_terrain_combat_width_values() {
+        // 地形宽度(对齐原版 terrain.txt combat_width)
+        assert!((terrain_combat_width("plains") - 70.0).abs() < 1e-9);
+        assert!((terrain_combat_width("forest") - 60.0).abs() < 1e-9);
+        assert!((terrain_combat_width("mountain") - 50.0).abs() < 1e-9);
+        assert!((terrain_combat_width("marsh") - 54.0).abs() < 1e-9);
+        assert!((terrain_combat_width("urban") - 80.0).abs() < 1e-9, "城市最宽80");
+        assert!((terrain_combat_width("unknown_xyz") - 70.0).abs() < 1e-9, "未知回退平原");
     }
 }
