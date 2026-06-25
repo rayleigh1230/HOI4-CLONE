@@ -5,7 +5,8 @@
 use crate::combat::modifier::{ModifierStack, ModifierStat};
 use crate::runtime::World;
 
-/// 基础战斗宽度(原版地形文件, 平原/森林/丘陵均70)
+/// 平原参考宽度(原版 terrain.txt plains combat_width=70)。
+/// 实际宽度按省份地形查 terrain_combat_width()(见 modifier.rs); 此常量保留作参考/回退。
 pub const BASE_COMBAT_WIDTH: f64 = 70.0;
 /// 每小时从预备队加入前线的概率(原版 REINFORCE_CHANCE)
 const REINFORCE_CHANCE: f64 = 0.02;
@@ -33,16 +34,20 @@ fn empty_mods() -> &'static ModifierStack {
 }
 
 /// 判断新师能否加入前线(加入后宽度是否 <= 上限)
-/// 上限 = BASE_COMBAT_WIDTH × mods.multiplier(CombatWidth)
-/// 空栈 multiplier=1.0 → 上限仍 70(现状不变)
+/// 上限 = 地形基础宽度(terrain_combat_width) × mods.multiplier(CombatWidth)
+/// 地形宽度: plains/hills/desert 70 / forest/jungle 60 / marsh 54 / mountain 50 / urban 80
+/// 空栈 multiplier=1.0 → 上限=地形基础宽度
 pub fn can_join_frontline(
     world: &World,
     frontline: &[u64],
     new_div_width: f64,
     mods: &ModifierStack,
+    province: u32,
 ) -> bool {
     let used = world.used_width(frontline);
-    let cap = BASE_COMBAT_WIDTH * mods.multiplier(ModifierStat::CombatWidth);
+    let terrain = world.provinces.get(&province).map(|p| p.terrain.as_str()).unwrap_or("plains");
+    let base = crate::combat::modifier::terrain_combat_width(terrain);
+    let cap = base * mods.multiplier(ModifierStat::CombatWidth);
     used + new_div_width <= cap
 }
 
@@ -58,12 +63,13 @@ pub fn reinforce_reserves(world: &mut World) {
 
     for (idx, res_atk, res_def) in battle_specs {
         let hour = world.hour;
+        let province = world.battles[idx].province;
         // 攻方预备队补位: 每个师独立 2% 概率判定(原版 REINFORCE_CHANCE)
         let mut joined_atk = Vec::new();
         for div_id in &res_atk {
             let width = world.divisions.get(div_id).map(|d| d.combat_width).unwrap_or(0.0);
             let frontline = &world.battles[idx].attackers;
-            if can_join_frontline(world, frontline, width, empty_mods()) && reinforce_triggered(hour, *div_id) {
+            if can_join_frontline(world, frontline, width, empty_mods(), province) && reinforce_triggered(hour, *div_id) {
                 joined_atk.push(*div_id);
             }
         }
@@ -72,7 +78,7 @@ pub fn reinforce_reserves(world: &mut World) {
         for div_id in &res_def {
             let width = world.divisions.get(div_id).map(|d| d.combat_width).unwrap_or(0.0);
             let frontline = &world.battles[idx].defenders;
-            if can_join_frontline(world, frontline, width, empty_mods()) && reinforce_triggered(hour, *div_id) {
+            if can_join_frontline(world, frontline, width, empty_mods(), province) && reinforce_triggered(hour, *div_id) {
                 joined_def.push(*div_id);
             }
         }
@@ -107,8 +113,8 @@ mod tests {
         let mut world = World::new();
         let d1 = wide_div("GER", 40.0);
         let id1 = world.add_division(d1);
-        // 前线40 + 新师20 = 60 <= 70, 可加入
-        assert!(can_join_frontline(&world, &[id1], 20.0, empty_mods()));
+        // 前线40 + 新师20 = 60 <= 70(平原), 可加入
+        assert!(can_join_frontline(&world, &[id1], 20.0, empty_mods(), 1));
     }
 
     #[test]
@@ -116,8 +122,29 @@ mod tests {
         let mut world = World::new();
         let d1 = wide_div("GER", 60.0);
         let id1 = world.add_division(d1);
-        // 前线60 + 新师20 = 80 > 70, 不能加入
-        assert!(!can_join_frontline(&world, &[id1], 20.0, empty_mods()));
+        // 前线60 + 新师20 = 80 > 70(平原), 不能加入
+        assert!(!can_join_frontline(&world, &[id1], 20.0, empty_mods(), 1));
+    }
+
+    #[test]
+    fn t_mountain_narrower_width_rejects_more() {
+        // 山地宽度 50(窄于平原70): 前线40 + 新师20 = 60 > 50, 不能加入
+        // (平原下 60<=70 可加入, 山地不行 — 证明宽度按地形变)
+        let mut world = World::new();
+        world.states.insert(1, crate::runtime::State {
+            id: 1, owner: "X".into(), controller: "X".into(), ..Default::default()
+        });
+        world.provinces.insert(1, crate::runtime::Province {
+            id: 1, state_id: 1, terrain: "mountain".into(), neighbors: vec![], ..Default::default()
+        });
+        let d1 = wide_div("GER", 40.0);
+        let id1 = world.add_division(d1);
+        assert!(!can_join_frontline(&world, &[id1], 20.0, empty_mods(), 1),
+            "山地宽度50, 60应超限");
+        // 对照: 同宽度在平原(70)可加入
+        world.provinces.get_mut(&1).unwrap().terrain = "plains".into();
+        assert!(can_join_frontline(&world, &[id1], 20.0, empty_mods(), 1),
+            "平原宽度70, 60应可加入");
     }
 
     #[test]

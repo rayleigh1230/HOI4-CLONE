@@ -13,6 +13,7 @@ fn add_test_province(w: &mut World, id: u32, owner: &str, terrain: &str) {
     });
     w.provinces.insert(id, hoi4_clone::runtime::Province {
         id, state_id: sid, terrain: terrain.into(), neighbors: vec![],
+        ..Default::default()
     });
 }
 

@@ -148,7 +148,23 @@ impl Interpreter {
             }
             Trigger::Not(inner) => Ok(!self.eval(inner, world)?),
             Trigger::Compare { lhs, op, rhs } => {
-                let l = world.get_var(lhs);
+                // 已知资源名读当前国家 effective; 其他变量走全局。
+                // 无国家作用域时资源视为 0(trigger 自然判 false, 不报错——与命令报错不对称是刻意的)。
+                let l = match lhs.as_str() {
+                    "political_power" => world.current_country()
+                        .and_then(|t| world.countries.get(t))
+                        .map(|c| c.effective_political_power())
+                        .unwrap_or(0.0),
+                    "stability" => world.current_country()
+                        .and_then(|t| world.countries.get(t))
+                        .map(|c| c.effective_stability())
+                        .unwrap_or(0.0),
+                    "war_support" => world.current_country()
+                        .and_then(|t| world.countries.get(t))
+                        .map(|c| c.effective_war_support())
+                        .unwrap_or(0.0),
+                    other => world.get_var(other),
+                };
                 let r = match rhs {
                     Arg::Num(n) => *n,
                     _ => return Ok(false),

@@ -53,6 +53,8 @@ mod tests {
         register_all(&mut reg);
         let interp = Interpreter::new(reg);
         let mut world = World::new();
+        world.player_tag = "GER".into();
+        world.countries.insert("GER".into(), Default::default());
         world.on(
             "on_daily",
             vec![Effect::Command {
@@ -61,11 +63,13 @@ mod tests {
             }],
         );
         GameClock::advance(&interp, &mut world, 23);
-        assert!(world.get_var("political_power").abs() < 1e-9);
+        let pp = world.countries.get("GER").unwrap().political_power;
+        assert!(pp.abs() < 1e-9, "23h 应未触发, PP=0");
         GameClock::tick(&interp, &mut world); // 第 24 次
+        let pp = world.countries.get("GER").unwrap().political_power;
         assert!(
-            (world.get_var("political_power") - 1.0).abs() < 1e-9,
-            "24h 后 on_daily 应触发"
+            (pp - 1.0).abs() < 1e-9,
+            "24h 后 on_daily 应触发, PP=1.0, 实际 {}", pp
         );
     }
 
@@ -75,6 +79,8 @@ mod tests {
         register_all(&mut reg);
         let interp = Interpreter::new(reg);
         let mut world = World::new();
+        world.player_tag = "GER".into();
+        world.countries.insert("GER".into(), Default::default());
         world.on(
             "on_hourly",
             vec![Effect::Command {
@@ -83,9 +89,10 @@ mod tests {
             }],
         );
         GameClock::advance(&interp, &mut world, 10);
+        let pp = world.countries.get("GER").unwrap().political_power;
         assert!(
-            (world.get_var("political_power") - 5.0).abs() < 1e-9,
-            "10 tick 应加 5.0"
+            (pp - 5.0).abs() < 1e-9,
+            "10 tick 应加 5.0 PP, 实际 {}", pp
         );
     }
 }

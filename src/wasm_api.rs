@@ -536,6 +536,21 @@ fn serialize_state(world: &World) -> String {
         ));
     }
     s.push_str("]");
+    // 国家列表(含资源字段 effective 值, 供顶栏 UI 显示玩家可见值)
+    s.push_str(",\"countries\":[");
+    let mut cfirst = true;
+    for (tag, country) in &world.countries {
+        if !cfirst { s.push(','); }
+        cfirst = false;
+        s.push_str(&format!(
+            "{{\"tag\":\"{}\",\"political_power\":{},\"stability\":{},\"war_support\":{}}}",
+            tag,
+            country.effective_political_power(),
+            country.effective_stability(),
+            country.effective_war_support()
+        ));
+    }
+    s.push_str("]");
     // 阵营映射(tag → faction 名; 无阵营的国家不出现在此映射)
     s.push_str(",\"factions\":{");
     let mut ffirst = true;

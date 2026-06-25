@@ -88,7 +88,7 @@ fn join_as_attacker(world: &mut crate::runtime::World, div_id: u64, target: u32,
             .any(|aid| world.divisions.get(aid)
                 .map(|d| origin_of(d) == from_prov)
                 .unwrap_or(false));
-        let over_width = !crate::combat::width::can_join_frontline(world, &world.battles[bidx].attackers, div_width, empty_m);
+        let over_width = !crate::combat::width::can_join_frontline(world, &world.battles[bidx].attackers, div_width, empty_m, target);
         if same_origin_exists || over_width {
             world.battles[bidx].reserve_attackers.push(div_id);
         } else {
@@ -100,7 +100,7 @@ fn join_as_attacker(world: &mut crate::runtime::World, div_id: u64, target: u32,
         let mut reserve_d = Vec::new();
         for eid in enemies {
             let w_div = world.divisions.get(eid).map(|d| d.combat_width).unwrap_or(0.0);
-            if crate::combat::width::can_join_frontline(world, &frontline_d, w_div, empty_m) {
+            if crate::combat::width::can_join_frontline(world, &frontline_d, w_div, empty_m, target) {
                 frontline_d.push(*eid);
             } else {
                 reserve_d.push(*eid);
@@ -321,7 +321,7 @@ pub fn register(reg: &mut Registry) {
         let empty_m = crate::combat::modifier::ModifierStack::empty_static();
         for did in &atks {
             let w_div = w.divisions.get(did).map(|d| d.combat_width).unwrap_or(0.0);
-            if crate::combat::width::can_join_frontline(w, &frontline_a, w_div, empty_m) {
+            if crate::combat::width::can_join_frontline(w, &frontline_a, w_div, empty_m, prov) {
                 frontline_a.push(*did);
             } else {
                 reserve_a.push(*did);
@@ -331,7 +331,7 @@ pub fn register(reg: &mut Registry) {
         let mut reserve_d = Vec::new();
         for did in &defs {
             let w_div = w.divisions.get(did).map(|d| d.combat_width).unwrap_or(0.0);
-            if crate::combat::width::can_join_frontline(w, &frontline_d, w_div, empty_m) {
+            if crate::combat::width::can_join_frontline(w, &frontline_d, w_div, empty_m, prov) {
                 frontline_d.push(*did);
             } else {
                 reserve_d.push(*did);

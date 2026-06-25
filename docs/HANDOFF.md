@@ -1,7 +1,7 @@
 # hoi4-clone 项目交接文档
 
 > **用途**: 在新会话中继续开发。读本文件 + 列出的关键文件即可接上。
-> **更新**: 2026-06-25(游戏逻辑层完善 — 占领省份级/国家视角权限/省间距离+师速度/外交系统/拖拽下令交互; Playwright 22/22; 126 测试)
+> **更新**: 2026-06-25(P0-2 地形修正接通 — 攻方惩罚 + 地形宽度; **208 测试** = 143 内联 + 48 battle + 13 integration + 3 scope + 1 teleport; 见下方"P0-2 地形修正接通"小节)
 
 ---
 
@@ -12,7 +12,7 @@
 - **位置**: `G:\projects\hoi4-clone\`
 - **运行**: `cargo test`(测试) / `cargo run --bin hoi4_demo`(CLI) / 浏览器 `http://127.0.0.1:8765`(UI demo)
 - **工具链**: `stable-x86_64-pc-windows-gnu`(rustup override 绑定)
-- **规模**: ~7800 行 Rust + UI(30+ JS 文件) + 原版数据, **126 Rust 测试 + 22 Playwright 验证**
+- **规模**: ~8100 行 Rust + UI(30+ JS 文件) + 原版数据, **208 Rust 测试 = 143 内联 + 48 battle + 13 integration + 3 scope + 1 teleport; 22 Playwright 验证**
 - **分支**: `feat/data-driven-engine`(本轮 25 个提交: 地图视觉 + 游戏逻辑完善)
 - **验证**: `node tests/web_demo.mjs`(Playwright, 用系统 Chrome channel:'chrome', 22 项端到端)
 
@@ -39,6 +39,70 @@
 | **demo 改造后修复+验证** | 见下方"demo 改造后修复"小节(9 项修复 + Playwright 真机验证 13/13) | 122+UI |
 | **地图视觉&战斗可视化改造** | 见下方"地图视觉改造"小节(13 Task + Playwright 17/17) | 122+UI |
 | **游戏逻辑层完善** | 见下方"游戏逻辑完善"小节(占领省份级/国家视角/移动距离+速度/外交/拖拽下令; 126 测试 + 22 验证) | 126+UI |
+| **P0-1 国家资源重构** | 见下方"P0-1 国家资源重构"小节(三件套国家级 + modifier 打通 + create_country; 202 测试) | 202 |
+| **P0-2 地形修正接通** | 见下方"P0-2 地形修正接通"小节(攻方地形惩罚 + 地形宽度(含反击修正); 208 测试) | 208 |
+
+### P0-2 地形修正接通(2026-06-25, 地基层最后一块拼图)
+
+把 `terrain_modifiers()` 占位(返回空栈)换成原版真实值。地基层(modifier/State/date/War)此前都完整, 唯独地形对战斗的影响是空的——所有战斗数值都偏。本次接通后战斗贴合原版。维度②攻方惩罚 + ③地形宽度(移动成本①此前已实现)。
+
+| 改造 | 内容 | 对齐/来源 |
+|---|---|---|
+| **攻方地形惩罚** | `terrain_attacker_penalty(terrain)`(原版 `common/terrain/00_terrain.txt` 的 `units={attack=-X}`, 数值取数据文件非 wiki): plains/desert1.0 / forest0.85(-0.15) / hills0.75(-0.25) / jungle·urban0.70(-0.30) / marsh0.60(-0.40) / mountain0.50(-0.50); 攻方 soft/hard_attack 乘此系数 | 原版 terrain.txt(攻方惩罚, 守方不受影响) |
+| **地形宽度** | `terrain_combat_width(terrain)`(原版 combat_width): plains·hills·desert70 / forest·jungle60 / marsh·mountain50 / urban80; `can_join_frontline` 按省份地形查表(原固定70) | 原版 terrain.txt combat_width |
+| **攻守区分注入** | CombatContext 加 `attacker_terrain_penalty` 字段(build 按省份地形填); 原版**只罚攻方身份**(攻守整场固定): 正向罚攻方 attack + 反击罚攻方 breakthrough(攻方挨反击池被削); 守方 attack/defense 都不罚(享受地形优势) | 原版 Land battle wiki: attacker receives attack and breakthrough penalties |
+
+**关键设计决策**(用户确认):
+- 范围 = 攻方惩罚 + 地形宽度(维度②③); 排除兵种地形加成(维度④, 需改营数据, 留装备层)
+- 数据硬编码查表(对齐 `terrain_movement_cost` 风格, 不引 terrain.txt 数据文件加载)
+- 攻方惩罚**不进 CombatContext 通用 stack**(避免误伤守方), 改为攻方专用注入
+- 多方向加宽(每多一进攻方向 +base/2)**本次不做**(YAGNI, demo 单方向), 留 TODO
+
+**踩坑**:
+- `resolve_all_battles` 有两处**内联**调 `AtkStats::from`(正向+反向反击), 绕过 `resolve_hour`; 改签名时两处都要更新(不只 resolve_hour)。
+- **地形惩罚攻守归属(2026-06-26 修正)**: 初版凭直觉"谁开火罚谁", 反击也罚守方。查证原版后发现错——原版只罚攻方身份(攻守整场固定, 不随反击翻转), 且罚 attack**和 breakthrough**两个。修正: 守方反击不罚其 attack; 攻方挨反击的 breakthrough 池被罚(更脆)。教训记入 CLAUDE.md 红线1。
+- integration 偶发 flaky(TEST_BLOCKED 泄漏, 既有); 单线程 `--test-threads=1` 稳定 206/206。
+
+### P0-1 国家资源模型重构(2026-06-25, 对齐 spec 2026-06-25-country-resources-design)
+
+把政治点/稳定度/战争支持度(三件套)从 `World.vars` **全局变量**改成 `Country` **具名字段**, 打通 modifier 接口。为后续国策/科技/政治系统铺地基(P0-1 是它们的前置)。spec → plan → 9 Task TDD 实现。
+
+| 改造 | 内容 | 对齐/来源 |
+|---|---|---|
+| **Country 加资源字段** | `political_power`/`stability`/`war_support` 具名字段(存 base); 手写 Default(stability/war_support=0.5 对齐原版 BASE_*) | 原版 defines NDefines.NCountry |
+| **modifier 接口打通** | `ModifierStat` 加 Stability/WarSupport/PoliticalPower; `parse_modifier_token` 接受 stability(+_factor) 等 token; 复用现有 ModifierStack(零新结构) | 原版: 稳定度走统一 modifier 框架, 非独立加法池(调研推翻"加法池"直觉) |
+| **effective 读取** | `effective_stability()`=clamp(base×mult,0,1) + buffer 保留超额; trigger/UI 读 effective, 命令改 base | 原版 Government wiki |
+| **资源命令国家级** | add/set_stability、add/set_political_power 从全局→当前作用域国家; 无国家时报错(非静默) | 决策5 |
+| **create_country 命令** | 建国家实体+设资源初值(字段可选); 重复 tag 覆盖 | 原版 history/countries 加载语义 |
+| **trigger Compare 作用域化** | `political_power >= 150` 读当前国家 effective; 无国家返回 0(trigger 不报错, 与命令不对称是刻意) | interp.rs |
+| **序列化** | get_state 新增 countries 数组(含 effective 资源字段), 供顶栏 UI(UI 本身后做) | — |
+
+**关键设计决策**(用户确认 + 原版调研):
+- 资源存 Country 具名字段(非 HashMap) — 三件套固定, 与现有具名字段风格一致
+- **复用 ModifierStack**(调研关键发现): 原版稳定度就是普通 modifier 属性走统一框架, `stability`(Add)+`stability_factor`(Multiply), 公式与战斗属性一致; 我一度以为是"独立加法池", 查证后纠正
+- 作用域栈优先回退 player_tag; 无国家时命令报错/trigger返回0(刻意不对称)
+- 不兼容全量迁移测试(不留双写债); 排除 PP默认增长/资源效果/fuel/UI(YAGNI, 留对应系统)
+
+**踩坑/记录**:
+- `ParamGet::get(p, key)` 要全限定调用 — slice 的 inherent `get(usize)` 会遮蔽 trait method(plan 初稿写成 `p.get("tag")` 编译失败, 修正)。
+- `current_country()` 返回 `Option<&str>` 借自 &World, 命令要 `&mut Country` → 用 `current_country_tag()`(owned String)快照后 `get_mut`(避借用冲突)。
+- integration 偶发 flaky(TEST_BLOCKED thread-local 跨测试泄漏, **既有问题非本次引入**); 单线程 `--test-threads=1` 稳定 13/13。
+
+### 测试基线修复(2026-06-25, 本轮)
+
+接手时发现 `cargo test` 编译即失败(并非 HANDOFF 旧版声称的"126 测试全绿")。根因:前序两轮改造加了字段/改了公式, 但**漏改了 `tests/` 集成测试**, 导致 3 个集成测试目标无法编译, 自那以后一直没跑过。修复后暴露并修好 8 个真实回归。这是"文档与实际脱节"的教训——下次改 struct 字段/核心公式后, 必须跑**全量** `cargo test`(含 `tests/` 集成目标), 不能只看 `src/` 内联测试。
+
+| # | 根因 | 影响范围 | 修复 |
+|---|---|---|---|
+| **A 编译失败** | commit 20cedf4 给 `Province` 加 `controller` 字段, 更新了 `src/` 4 处构造点, 但**漏掉 `tests/battle.rs` `tests/scope.rs` `tests/teleport_bug.rs`** 的 `Province{}` 构造 | 3 个集成测试目标编译失败, 全量 `cargo test` build failure | 3 处补 `..Default::default()` |
+| **B 移动计时回归** | commit c3a3f92 把移动公式从恒定 `MOVE_RATE=0.05`(20h 到达) 改为 `max_speed/(距离km×地形成本)`, 但**没更新 battle.rs 里硬编码的 `advance(小时数)`** | 5 个测试: move_to_empty/march_into/frontline_route/t_multihop/t_queue_move — advance(21/90/100) 在新公式下不够到达 | 把 advance 加大到新公式下足够到达(80/250/800 等), 每处加注释说明公式与距离 |
+| **C 国家视角回归** | commit 0b65327 加了 `player_controls` 校验(player_tag 非空时只能下令自己国家的师), 但**战斗编排测试靠双向下令 GER+FRA 师造场景**, 在 `player_tag="GER"` 下 FRA 命令被静默拒绝 | 3 个测试: stop_keeps_passive_defense/defender_move_to_friendly/defender_move_to_enemy — 下 FRA 命令被拒, 战斗未创建 | 这 3 个测试清空 `player_tag=""`(CLI 模式, 绕过单国家控制; 它们测引擎规则非玩家权限) |
+
+**验证**: `cargo test` 全绿 — 126 内联 + 48 battle + 13 integration + 3 scope + 1 teleport = **191 测试**; `cargo build --target wasm32-unknown-unknown --lib --release` 0 警告。
+
+**遗留观察(非 bug, 记录用)**:
+- 旧建师路径(`create_division` 用 `battalions=`)的 `max_speed` 硬编码 4.0(`commands.rs:259`), **忽略 equipment 参数的速度**——medium_tank 装备并不给 8 的速度。这是设计债(equipment_data.rs 同源), 不在本轮范围。battle.rs 测试据此校准小时数。
+- `tests/integration.rs` 偶发单测失败(TEST_BLOCKED thread-local 跨测试泄漏? 重跑即过)。若再现, 查 pathfinding.rs:80 `set_test_blocked`/`clear_test_blocked` 配对。
 
 ### 游戏逻辑层完善(2026-06-25)
 
@@ -270,7 +334,7 @@ docs/
 | **科技** | 完成 → add_country_modifier(stat=soft_attack value=0.05); 解锁装备(GameData) |
 | **将领** | add_division_modifier; 技能影响 modifier |
 | **堑壕** | 战斗每小时 dig_in++, 转 add_division_modifier(stat=defense_factor) |
-| **地形** | terrain_modifiers 函数填真实值(替换占位空栈) |
+| **地形** | **已实现**: terrain_attacker_penalty(攻方惩罚) + terrain_combat_width(地形宽度); 见"P0-2 地形修正接通"小节。剩余: 兵种地形加成(维度④, 留装备层) + 多方向加宽(TODO) |
 | **昼夜** | State纬度 + World.date().day_of_year() → darkness; CombatContext省份层加 night_modifier |
 | **补给** | 读 State.buildings(infrastructure); supply flow 沿 State 计算 |
 | **生产** ★下一阶段 | 读 State.buildings(industrial_complex/arms_factory); 国家仓库 Country.equipment_stockpile(待加); reinforce 改从仓库扣减(不再从虚空) |
@@ -338,7 +402,7 @@ docs/
 1. 在 `G:\projects\hoi4-clone\` 开新对话
 2. 读本文件了解全局; 读 `docs/design-principles.md` 了解设计原则(原版是首要参考)
 3. `git checkout feat/data-driven-engine`(若不在)
-4. 跑 `cargo test` 确认基线(**126 测试**)
+4. 跑 `cargo test` 确认基线(**208 测试 = 143 内联 + 65 集成/battle/scope/teleport**; integration 偶发 flaky 用 `--test-threads=1` 稳定)
 5. (可选)跑 `node tests/web_demo.mjs` 确认 UI(需先 `cd web && python -m http.server 8765`)
 6. 看 §4 选下一步(**生产+装备系统**是推荐重点)
 

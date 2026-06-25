@@ -19,6 +19,10 @@ pub enum ModifierStat {
     CombatWidth,
     // 组织度恢复率
     OrgRegain,
+    // ★ 资源属性(国家级三件套)
+    Stability,        // stability / stability_factor
+    WarSupport,       // war_support / war_support_factor
+    PoliticalPower,   // political_power / political_power_factor
 }
 
 /// 修正的叠加方式(由属性名后缀推导)
@@ -114,6 +118,9 @@ pub fn parse_modifier_token(s: &str) -> Option<(ModifierStat, ModifierOp)> {
         "piercing" | "ap_attack" => ModifierStat::Piercing,
         "combat_width" => ModifierStat::CombatWidth,
         "org_regain" | "local_org_regain" => ModifierStat::OrgRegain,
+        "stability" => ModifierStat::Stability,
+        "war_support" => ModifierStat::WarSupport,
+        "political_power" => ModifierStat::PoliticalPower,
         _ => return None,
     };
     Some((stat, op))
@@ -128,6 +135,9 @@ use std::collections::HashMap;
 pub struct CombatContext {
     /// 每个参战师的 modifier 汇总(按 division_id 索引)
     stacks: HashMap<u64, ModifierStack>,
+    /// 该战斗省份的攻方地形惩罚系数(0-1, 越低惩罚越重; 守方不受影响)。
+    /// build 时按 battle.province 地形算好, 结算时只乘攻方(AtkStats::from)。
+    attacker_terrain_penalty: f64,
 }
 
 impl CombatContext {
@@ -135,6 +145,10 @@ impl CombatContext {
     /// = 国家modifier + 该师所在省modifier + 师自身modifier
     pub fn build(world: &World, battle: &Battle) -> CombatContext {
         let mut stacks = HashMap::new();
+        // 攻方地形惩罚: 按 battle.province 地形查表(守方不享受此系数)
+        let attacker_terrain_penalty = world.provinces.get(&battle.province)
+            .map(|p| terrain_attacker_penalty(&p.terrain))
+            .unwrap_or(1.0);
         for div_id in battle
             .attackers
             .iter()
@@ -150,16 +164,13 @@ impl CombatContext {
             if let Some(c) = world.countries.get(&d.owner_tag) {
                 stack.merge(&c.modifiers);
             }
-            // 省份层: 地形(静态查表)
-            if let Some(p) = world.provinces.get(&battle.province) {
-                stack.merge(&terrain_modifiers(&p.terrain));
-                // 后续昼夜: stack.merge(&night_modifier(world.darkness[battle.province]))
-            }
+            // 省份层: 地形攻方惩罚不进此通用 stack(只作用于攻方, 见 AtkStats::from)。
+            // 后续昼夜 modifier(night × darkness)在此 merge(昼夜对攻守都生效)。
             // 师自身: 堑壕/计划/经验
             stack.merge(&d.modifiers);
             stacks.insert(*div_id, stack);
         }
-        CombatContext { stacks }
+        CombatContext { stacks, attacker_terrain_penalty }
     }
 
     /// 取某师的 modifier 汇总(找不到则返回静态空栈引用, 不 panic)
@@ -167,17 +178,46 @@ impl CombatContext {
         self.stacks.get(&div_id).unwrap_or_else(|| ModifierStack::empty_static())
     }
 
+    /// 攻方地形惩罚系数(0-1; 守方不应使用此值)
+    pub fn attacker_terrain_penalty(&self) -> f64 {
+        self.attacker_terrain_penalty
+    }
+
     /// 构造一个空上下文(无任何 modifier, 用于不关心 modifier 的调用点/测试)
     pub fn empty() -> CombatContext {
-        CombatContext { stacks: HashMap::new() }
+        CombatContext { stacks: HashMap::new(), attacker_terrain_penalty: 1.0 }
     }
 }
 
-/// 地形 modifier 查表(占位: 本次返回空栈, 无地形数据)
-/// 后续地形系统实现时, 按 terrain 名返回真实修正(森林 attack -0.15 等)
-/// 夜间修正(night modifier × darkness)后续也走这里, 详见 spec §3.4。
-pub fn terrain_modifiers(_terrain: &str) -> ModifierStack {
-    ModifierStack::new()
+/// 地形攻方惩罚系数(0.0-1.0, 越低惩罚越重)。
+/// 原版 common/terrain/00_terrain.txt 的 `units = { attack = -X }`: 攻方 soft/hard_attack 打折。
+/// 守方不受影响(享受地形优势)。数值取自原版数据文件(wiki 的 -20%/-60% 不准):
+///   plains/desert 无 units 块 → 1.0 / forest -0.15 → 0.85 / hills -0.25 → 0.75 /
+///   jungle -0.30 → 0.70 / urban -0.30 → 0.70 / marsh -0.40 → 0.60 / mountain -0.50 → 0.50。
+/// 用于 AtkStats::from 攻方快照(只乘攻方, 不进 CombatContext 通用 stack)。
+pub fn terrain_attacker_penalty(terrain: &str) -> f64 {
+    match terrain {
+        "plains" | "desert" => 1.0,
+        "forest" => 0.85,
+        "hills" => 0.75,
+        "jungle" | "urban" => 0.70,
+        "marsh" => 0.60,
+        "mountain" => 0.50,
+        _ => 1.0, // 未知地形回退平原(无惩罚)
+    }
+}
+
+/// 地形战斗宽度(每种地形基础宽度不同; 原版 terrain.txt combat_width)。
+/// 数值取自原版数据文件: plains/desert/hills 70 / forest/jungle 60 / marsh/mountain 50 / urban 80。
+/// 多方向加宽(每多一进攻方向 +combat_support_width)本次不做(YAGNI, demo 单方向), 留 TODO。
+pub fn terrain_combat_width(terrain: &str) -> f64 {
+    match terrain {
+        "plains" | "desert" | "hills" => 70.0,
+        "forest" | "jungle" => 60.0,
+        "marsh" | "mountain" => 50.0,
+        "urban" => 80.0,
+        _ => 70.0, // 未知地形回退平原
+    }
 }
 
 #[cfg(test)]
@@ -270,9 +310,33 @@ mod tests {
 
     #[test]
     fn t_parse_unknown_returns_none() {
-        assert!(parse_modifier_token("stability_factor").is_none());
+        // 真正未知的属性仍返回 None(stability/political_power 现在是已知资源属性, 见 t_parse_resource_tokens)
         assert!(parse_modifier_token("ace_effectiveness_factor").is_none());
-        assert!(parse_modifier_token("political_power").is_none());
+        assert!(parse_modifier_token("research_speed").is_none());
+        assert!(parse_modifier_token("foo_bar").is_none());
+    }
+
+    #[test]
+    fn t_parse_resource_tokens() {
+        // 资源属性三件套: 无后缀=Add, _factor=Multiply(对齐原版)
+        let (s, op) = parse_modifier_token("stability").unwrap();
+        assert_eq!(s, ModifierStat::Stability);
+        assert_eq!(op, ModifierOp::Add);
+        let (s, op) = parse_modifier_token("stability_factor").unwrap();
+        assert_eq!(s, ModifierStat::Stability);
+        assert_eq!(op, ModifierOp::Multiply);
+
+        let (s, op) = parse_modifier_token("war_support").unwrap();
+        assert_eq!(s, ModifierStat::WarSupport);
+        assert_eq!(op, ModifierOp::Add);
+        let (s, _) = parse_modifier_token("war_support_factor").unwrap();
+        assert_eq!(s, ModifierStat::WarSupport);
+
+        let (s, op) = parse_modifier_token("political_power").unwrap();
+        assert_eq!(s, ModifierStat::PoliticalPower);
+        assert_eq!(op, ModifierOp::Add);
+        let (s, _) = parse_modifier_token("political_power_factor").unwrap();
+        assert_eq!(s, ModifierStat::PoliticalPower);
     }
 
     use crate::runtime::{Battle, World};
@@ -331,5 +395,64 @@ mod tests {
         };
         let ctx = CombatContext::build(&w, &battle);
         assert!(ctx.get(999).is_empty());
+    }
+
+    #[test]
+    fn t_terrain_attacker_penalty_values() {
+        // 攻方惩罚系数(对齐原版 common/terrain/00_terrain.txt 的 units={attack=-X}):
+        // 越恶劣越低。数值取自原版数据文件(wiki 的 -20%/-60% 不准)
+        assert!((terrain_attacker_penalty("plains") - 1.0).abs() < 1e-9, "平原无 units 块无惩罚");
+        assert!((terrain_attacker_penalty("desert") - 1.0).abs() < 1e-9);
+        assert!((terrain_attacker_penalty("forest") - 0.85).abs() < 1e-9, "森林 attack=-0.15");
+        assert!((terrain_attacker_penalty("hills") - 0.75).abs() < 1e-9, "丘陵 attack=-0.25");
+        assert!((terrain_attacker_penalty("jungle") - 0.70).abs() < 1e-9, "丛林 attack=-0.30");
+        assert!((terrain_attacker_penalty("urban") - 0.70).abs() < 1e-9, "城市 attack=-0.30");
+        assert!((terrain_attacker_penalty("marsh") - 0.60).abs() < 1e-9, "沼泽 attack=-0.40");
+        assert!((terrain_attacker_penalty("mountain") - 0.50).abs() < 1e-9, "山地 attack=-0.50");
+        assert!((terrain_attacker_penalty("unknown_xyz") - 1.0).abs() < 1e-9, "未知回退平原");
+    }
+
+    #[test]
+    fn t_terrain_combat_width_values() {
+        // 地形宽度(对齐原版 common/terrain/00_terrain.txt combat_width)
+        assert!((terrain_combat_width("plains") - 70.0).abs() < 1e-9);
+        assert!((terrain_combat_width("hills") - 70.0).abs() < 1e-9);
+        assert!((terrain_combat_width("forest") - 60.0).abs() < 1e-9);
+        assert!((terrain_combat_width("mountain") - 50.0).abs() < 1e-9);
+        assert!((terrain_combat_width("marsh") - 50.0).abs() < 1e-9, "沼泽50(原版, 非54)");
+        assert!((terrain_combat_width("urban") - 80.0).abs() < 1e-9, "城市最宽80");
+        assert!((terrain_combat_width("unknown_xyz") - 70.0).abs() < 1e-9, "未知回退平原");
+    }
+
+    #[test]
+    fn t_context_attacker_terrain_penalty_from_battle_province() {
+        // CombatContext::build 按 battle.province 地形填攻方惩罚系数
+        let mut w = World::new();
+        w.states.insert(1000, crate::runtime::State {
+            id: 1000, owner: "GER".into(), controller: "GER".into(), ..Default::default()
+        });
+        // 山地省(惩罚 0.40)
+        w.provinces.insert(1, crate::runtime::Province {
+            id: 1, state_id: 1000, terrain: "mountain".into(), neighbors: vec![], ..Default::default()
+        });
+        let battle = Battle {
+            id: 0, province: 1, attackers: vec![], defenders: vec![],
+            reserve_attackers: vec![], reserve_defenders: vec![],
+        };
+        let ctx = CombatContext::build(&w, &battle);
+        assert!((ctx.attacker_terrain_penalty() - 0.50).abs() < 1e-9,
+            "山地战斗攻方惩罚应 0.50(原版 attack=-0.5), 实际 {}", ctx.attacker_terrain_penalty());
+
+        // 平原省(无惩罚)
+        w.provinces.insert(2, crate::runtime::Province {
+            id: 2, state_id: 1000, terrain: "plains".into(), neighbors: vec![], ..Default::default()
+        });
+        let battle2 = Battle { id: 0, province: 2, attackers: vec![], defenders: vec![],
+            reserve_attackers: vec![], reserve_defenders: vec![] };
+        let ctx2 = CombatContext::build(&w, &battle2);
+        assert!((ctx2.attacker_terrain_penalty() - 1.0).abs() < 1e-9, "平原无惩罚");
+
+        // 空上下文默认无惩罚(不破坏现有调用点)
+        assert!((CombatContext::empty().attacker_terrain_penalty() - 1.0).abs() < 1e-9);
     }
 }

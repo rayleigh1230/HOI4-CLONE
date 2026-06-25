@@ -30,19 +30,64 @@ pub struct State {
     pub provinces: Vec<u32>,       // 这个 State 包含哪些省份(正向映射)
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct Country {
     pub tag: String,
     pub owned_states: Vec<u32>,
     pub capital_state: u32,
+    /// 政治点(累积值, 无 modifier 叠加; 原版范围 -500..2000)
+    pub political_power: f64,
+    /// 基础稳定度(0.0-1.0; 受事件/国策改 base, modifier 读取时叠加)
+    pub stability: f64,
+    /// 基础战争支持度(0.0-1.0)
+    pub war_support: f64,
     /// 装备库存(M4a): equipment_type → 数量
     pub equipment_stockpile: std::collections::HashMap<String, f64>,
     /// 人力池(陆战循环): 国家征召的兵员储备
     pub manpower_pool: f64,
-    /// modifier 汇总(科技/精神/ideas 等国家级修正)
+    /// modifier 汇总(科技/精神/ideas 等国家级修正; 战斗+资源修正统一栈)
     pub modifiers: crate::combat::modifier::ModifierStack,
     /// 阵营名(None = 不在阵营; 宣战时同阵营成员自动加入)
     pub faction: Option<String>,
+}
+
+impl Default for Country {
+    fn default() -> Self {
+        Self {
+            tag: String::new(),
+            owned_states: Vec::new(),
+            capital_state: 0,
+            political_power: 0.0,
+            stability: 0.5,      // 原版 BASE_STABILITY
+            war_support: 0.5,    // 原版 BASE_WAR_SUPPORT
+            equipment_stockpile: Default::default(),
+            manpower_pool: 0.0,
+            modifiers: Default::default(),
+            faction: None,
+        }
+    }
+}
+
+impl Country {
+    /// 有效稳定度 = clamp(base × 资源modifier, 0, 1)。trigger/UI 读此值。
+    pub fn effective_stability(&self) -> f64 {
+        let raw = self.stability * self.modifiers.multiplier(crate::combat::modifier::ModifierStat::Stability);
+        raw.clamp(0.0, 1.0)
+    }
+    /// 稳定度 buffer(超 100% 部分, 抵御未来负修正; 对齐原版)
+    pub fn stability_buffer(&self) -> f64 {
+        let raw = self.stability * self.modifiers.multiplier(crate::combat::modifier::ModifierStat::Stability);
+        (raw - 1.0).max(0.0)
+    }
+    /// 有效战争支持度 = clamp(base × modifier, 0, 1)
+    pub fn effective_war_support(&self) -> f64 {
+        let raw = self.war_support * self.modifiers.multiplier(crate::combat::modifier::ModifierStat::WarSupport);
+        raw.clamp(0.0, 1.0)
+    }
+    /// 有效政治点 = base × modifier(不 clamp; 累积值)
+    pub fn effective_political_power(&self) -> f64 {
+        self.political_power * self.modifiers.multiplier(crate::combat::modifier::ModifierStat::PoliticalPower)
+    }
 }
 
 /// 一场战争(战略级, 多个参与方分攻守两侧)

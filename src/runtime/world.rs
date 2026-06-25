@@ -115,6 +115,12 @@ impl World {
         }
     }
 
+    /// 当前国家 tag 的 owned 副本(供命令快照后 get_mut, 避借用冲突)。
+    /// 语义同 current_country(): 栈优先回退 player_tag; 无则 None。
+    pub fn current_country_tag(&self) -> Option<String> {
+        self.current_country().map(|s| s.to_string())
+    }
+
     // M3 实体管理
     pub fn add_division(&mut self, mut d: Division) -> u64 {
         d.id = self.next_division_id;
@@ -367,6 +373,62 @@ mod tests {
         let w = World::new();
         assert!(!w.data.equipment.is_empty(), "World 应持有非空 GameData");
         assert!(!w.data.sub_units.is_empty(), "应含营定义");
+    }
+
+    #[test]
+    fn t_country_default_resources() {
+        // Country 默认资源: PP=0, stability=0.5, war_support=0.5(对齐原版 BASE_*)
+        let c = crate::runtime::Country::default();
+        assert!((c.political_power - 0.0).abs() < 1e-9);
+        assert!((c.stability - 0.5).abs() < 1e-9, "默认稳定度应 0.5");
+        assert!((c.war_support - 0.5).abs() < 1e-9, "默认战争支持度应 0.5");
+    }
+
+    #[test]
+    fn t_effective_stability_clamp_and_buffer() {
+        // effective = clamp(base × mult, 0, 1); 无 modifier 时 = base
+        let mut c = crate::runtime::Country::default();
+        c.stability = 0.7;
+        assert!((c.effective_stability() - 0.7).abs() < 1e-9, "无修正时 effective=base");
+        // base 超 1.0: effective 应 clamp 到 1.0, buffer 保留超额
+        c.stability = 1.5;
+        assert!((c.effective_stability() - 1.0).abs() < 1e-9, "应 clamp 到 1.0");
+        assert!((c.stability_buffer() - 0.5).abs() < 1e-9, "buffer 应保留超额 0.5");
+    }
+
+    #[test]
+    fn t_country_has_per_instance_resources() {
+        // 核心验收: 两个 Country 的资源互不影响(国家级化, 非全局)
+        let mut a = crate::runtime::Country::default();
+        a.political_power = 100.0;
+        let mut b = crate::runtime::Country::default();
+        b.political_power = 50.0;
+        assert!((a.political_power - 100.0).abs() < 1e-9);
+        assert!((b.political_power - 50.0).abs() < 1e-9, "两国 PP 应独立");
+    }
+
+    #[test]
+    fn t_trigger_compare_reads_country_resource() {
+        // trigger political_power >= 150 应读当前国家(player_tag)的 effective PP
+        use crate::ast::lower::lower_effects;
+        use crate::commands::register_all;
+        use crate::runtime::{Interpreter, Registry};
+        let mut reg = Registry::new();
+        register_all(&mut reg);
+        crate::combat::commands::register(&mut reg);
+        let interp = Interpreter::new(reg);
+        let mut w = World::new();
+        w.player_tag = "GER".into();
+        // GER 有 200 PP
+        w.countries.insert("GER".into(), crate::runtime::Country {
+            political_power: 200.0, ..Default::default()
+        });
+        // 脚本: if political_power >= 150 then set_flag done
+        let src = "if = { limit = { political_power >= 150 } set_flag = done }";
+        let b = crate::parser::parse(src).unwrap();
+        let effs = lower_effects(&b);
+        interp.run(&effs, &mut w);
+        assert!(w.has_flag("done"), "GER PP=200 >= 150 应触发, flag=done");
     }
 
     /// 辅助: 用 Registry + Interpreter 跑脚本, 返回 World(命令测试用)

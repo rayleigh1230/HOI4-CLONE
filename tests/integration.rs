@@ -28,9 +28,9 @@ fn reward_block(b: &hoi4_clone::parser::Block) -> &hoi4_clone::parser::Block {
 #[test]
 fn focus_add_pp_then_stability() {
     // 模拟一个国策 completion_reward: 加 150 政治点, 若 pp>=150 则加稳定度
-    // 注意: limit 里的 political_power >= 150 是裸比较,会被降级成真正的 Trigger::Compare
-    //       在 interp.eval 中读 world.get_var("political_power")。由于 add_political_power 先执行
-    //       把 pp 设为 150, 满足 >=150, 所以 stability 被加 0.05。
+    // 注意: limit 里的 political_power >= 150 是裸比较,被降级成 Trigger::Compare,
+    //   现读当前国家(player_tag)的 effective PP。add_political_power 先执行把 pp 设为 150,
+    //   满足 >=150, 所以 stability 被加 0.05(base 从默认 0.5 起算 → 0.55)。
     let src = r#"
         completion_reward = {
             add_political_power = 150
@@ -48,11 +48,14 @@ fn focus_add_pp_then_stability() {
     register_all(&mut reg);
     let interp = Interpreter::new(reg);
     let mut world = World::new();
+    world.player_tag = "GER".into();
+    world.countries.insert("GER".into(), Default::default());
 
     interp.run(&effs, &mut world);
 
-    assert!((world.get_var("political_power") - 150.0).abs() < 1e-9);
-    assert!((world.get_var("stability") - 0.05).abs() < 1e-9);
+    let c = world.countries.get("GER").unwrap();
+    assert!((c.political_power - 150.0).abs() < 1e-9);
+    assert!((c.stability - 0.55).abs() < 1e-9, "默认0.5+0.05=0.55, 实际 {}", c.stability);
 }
 
 #[test]
@@ -76,12 +79,15 @@ fn compare_trigger_false_branch() {
     register_all(&mut reg);
     let interp = Interpreter::new(reg);
     let mut world = World::new();
+    world.player_tag = "GER".into();
+    world.countries.insert("GER".into(), Default::default());
     interp.run(&effs, &mut world);
 
-    assert!((world.get_var("political_power") - 150.0).abs() < 1e-9);
+    let c = world.countries.get("GER").unwrap();
+    assert!((c.political_power - 150.0).abs() < 1e-9);
     assert!(
-        world.get_var("stability").abs() < 1e-9,
-        "pp=150 < 200, 比较应失败, stability 应保持 0"
+        (c.stability - 0.5).abs() < 1e-9,
+        "pp=150 < 200, 比较应失败, stability 应保持默认 0.5, 实际 {}", c.stability
     );
 }
 
@@ -180,9 +186,12 @@ fn full_focus_tree_parse_and_execute() {
     register_all(&mut reg);
     let interp = Interpreter::new(reg);
     let mut world = World::new();
+    world.player_tag = "GER".into();
+    world.countries.insert("GER".into(), Default::default());
     interp.run(&effs, &mut world);
 
-    assert!((world.get_var("political_power") - 100.0).abs() < 1e-9);
+    let c = world.countries.get("GER").unwrap();
+    assert!((c.political_power - 100.0).abs() < 1e-9);
     assert!(world.has_flag("demo_done"));
 }
 

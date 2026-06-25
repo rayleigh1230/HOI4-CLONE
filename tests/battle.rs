@@ -14,6 +14,7 @@ fn add_test_province(w: &mut World, id: u32, owner: &str, neighbors: Vec<u32>) {
     });
     w.provinces.insert(id, hoi4_clone::runtime::Province {
         id, state_id: sid, terrain: "plains".into(), neighbors,
+        ..Default::default()
     });
 }
 
@@ -585,8 +586,10 @@ fn move_to_empty_province_no_battle() {
     assert_eq!(world.battles.len(), 0, "移到己方空省不应开战");
     assert!(!world.divisions.get(&ger_id).unwrap().is_attacking_move(), "应非进攻状态");
     // 推进到达
+    // 注: 移动公式为 max_speed/(距离km×地形成本); 省10→省1 ≈ 310km, 步兵 max_speed=4,
+    // 故到达需 ~217h。给 300h 余量。(旧 MOVE_RATE=0.05 时 20h 即达, 公式改后须加大。)
     use hoi4_clone::runtime::GameClock;
-    GameClock::advance(&interp, &mut world, 100);
+    GameClock::advance(&interp, &mut world, 300);
     assert_eq!(world.divisions.get(&ger_id).unwrap().location_province, 1, "应到达省1");
 }
 
@@ -616,7 +619,8 @@ fn march_into_empty_enemy_province_captures() {
     assert!(world.divisions.get(&ger_id).unwrap().is_attacking_move(), "进军敌方地块应红箭头");
     assert_eq!(world.battles.len(), 0, "无防御部队不应开战");
     // 推进到达(进军速度慢, 给足时间)
-    GameClock::advance(&interp, &mut world, 100);
+    // 注: 进军 hostile×0.33, 省1→省2 ≈ 200km, max_speed=4 → ~154h 到达, 给 250h 余量。
+    GameClock::advance(&interp, &mut world, 250);
     assert_eq!(world.divisions.get(&ger_id).unwrap().location_province, 2, "应到达省2");
     assert_eq!(world.province_controller(2).unwrap_or(""), "GER", "到达应占领省2");
 }
@@ -649,7 +653,9 @@ fn frontline_route_causes_reserve_routing() {
     // GER 进攻省1, FRA 2师都在前线(28宽<70)
     assert!(!world.battles.is_empty(), "应有战斗");
     // 推进让 FRA 前线崩 + GER 行军到达占领
-    GameClock::advance(&interp, &mut world, 100);
+    // 注: 进军 hostile×0.33, 省10→省1 ≈ 800km(第5列→第1列), 旧建师路径 max_speed=4
+    // → ~606h 到达。FRA 前线会先崩(战斗早结束), 但 GER 须走完长路程才占领, 给 800h 余量。
+    GameClock::advance(&interp, &mut world, 800);
     // FRA 前线全崩 → 战斗结束 + GER 到达占地
     assert_eq!(world.battles.len(), 0, "前线崩后战斗应结束");
     assert_eq!(world.province_controller(1).unwrap_or(""), "GER", "应占领省1");
@@ -1199,7 +1205,9 @@ fn stop_keeps_passive_defense() {
     let interp = Interpreter::new(reg);
     let mut world = World::new();
     world.declare_war("GER", "FRA");
-    world.player_tag = "GER".into();
+    // 本测试需要双向下令 GER 与 FRA 的师来编排战斗场景, 故清空 player_tag
+    // (player_controls 限制: player_tag 非空时只能下令玩家自己的师, 会拒绝 FRA 命令)。
+    world.player_tag = String::new();
     world.countries.insert("GER".into(), Default::default());
     world.countries.insert("FRA".into(), Default::default());
     // 省10(GER) 邻接省1(FRA)和省2(FRA空); 省1(FRA)也邻接省10
@@ -1251,6 +1259,8 @@ fn defender_move_to_friendly_becomes_retreat() {
     register_all(&mut reg);
     let interp = Interpreter::new(reg);
     let mut world = setup_world();
+    // 双向下令 GER 与 FRA 师编排场景: 清空 player_tag 绕过单国家控制限制
+    world.player_tag = String::new();
     // 省1属FRA, FRA守省1; GER从省10进攻省1 → FRA是省1防守方
     run_setup(&mut world, &interp, r#"
         _setup = {
@@ -1289,6 +1299,8 @@ fn defender_move_to_enemy_keeps_attacking() {
     register_all(&mut reg);
     let interp = Interpreter::new(reg);
     let mut world = setup_world();
+    // 双向下令 GER 与 FRA 师编排场景: 清空 player_tag 绕过单国家控制限制
+    world.player_tag = String::new();
     run_setup(&mut world, &interp, r#"
         _setup = {
             create_division = { owner = FRA location = 1 soft_attack = 30 defense = 40 max_org = 60 }
@@ -1436,9 +1448,10 @@ fn t_multihop_move_occupies_each_segment() {
         assert!(div.is_moving(), "下令后应 Moving");
         assert_eq!(div.move_dest(), Some(2), "第1段 dest 应为省2(寻路第1站)");
     }
-    // 推进 ~21h 到达省2(第1段), 占领省2
-    // 注: Task4 续走逻辑尚未实现, 到达省2后转 Idle(后续 Task 实现续走后再加强此测试)
-    GameClock::advance(&interp, &mut world, 21);
+    // 推进到达省2(第1段), 占领省2
+    // 注: 移动公式 max_speed/(距离×地形); 省1→省2 ≈ 200km, max_speed=4 → ~52h 到达, 给 80h 余量。
+    // (旧 MOVE_RATE=0.05 时 21h 即达, 公式改后须加大。)
+    GameClock::advance(&interp, &mut world, 80);
     let div = world.divisions.get(&did).unwrap();
     assert_eq!(div.location_province, 2, "到达省2 后归属地应为2");
 }
@@ -1564,7 +1577,8 @@ fn t_queue_move_appends_waypoint() {
     // 再 queue_move 到省4(追加: 当前路径末尾省3 → 寻路到省4, 拼接)
     run_cmd(&mut world, &interp, &format!("queue_move = {{ division = {did} target = 4 }}"));
     // 推进足够长 → 应到达省4(经 1→2→3→4)
-    GameClock::advance(&interp, &mut world, 90);
+    // 注: 3 段友好行军各 ≈200km/max_speed=4 → ~52h/段, 共 ~156h, 给 250h 余量。
+    GameClock::advance(&interp, &mut world, 250);
     let div = world.divisions.get(&did).unwrap();
     assert_eq!(div.location_province, 4, "应到达追加的航点省4");
     assert!(div.is_idle());
