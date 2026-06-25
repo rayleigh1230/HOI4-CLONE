@@ -9,7 +9,7 @@ use crate::parser::{Block, Value};
 use std::collections::HashMap;
 
 /// 营定义(原版 sub_units 里的一个条目)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SubUnitDef {
     pub name: String,           // "infantry" / "medium_armor" / "engineer"
     pub group: String,          // "infantry" / "armor" / "support"
@@ -19,6 +19,9 @@ pub struct SubUnitDef {
     pub max_organisation: f64,
     pub default_morale: f64,
     pub manpower: f64,
+    /// 师速度上限(km/h)。原版: 取师内最慢营的 max_speed。
+    /// infantry=4, light_armor=12 等。解析 sub_units 文件的 max_speed = 字段。
+    pub max_speed: f64,
     /// 满编需求: equipment_name → 件数
     pub need: HashMap<String, f64>,
     /// (支援连)对其它营的修正
@@ -98,6 +101,13 @@ pub fn parse_sub_unit(name: &str, block: &Block) -> SubUnitDef {
         .unwrap_or_default();
     let need = parse_need(block);
     let battalion_mults = parse_battalion_mults(block);
+    // max_speed: 文件有则用, 无则默认 4.0(原版最慢步兵速度, 保证有速度不卡死)
+    let max_speed = block
+        .fields
+        .iter()
+        .find(|f| f.key == "max_speed")
+        .and_then(|f| f.value.as_scalar_num())
+        .unwrap_or(4.0);
 
     SubUnitDef {
         name: name.into(),
@@ -108,6 +118,7 @@ pub fn parse_sub_unit(name: &str, block: &Block) -> SubUnitDef {
         max_organisation: num("max_organisation"),
         default_morale: num("default_morale"),
         manpower: num("manpower"),
+        max_speed,
         need,
         battalion_mults,
     }
@@ -206,6 +217,7 @@ mod tests {
             manpower: 1000.0,
             need: HashMap::from([("infantry_equipment_1".into(), 100.0)]),
             battalion_mults: vec![],
+            max_speed: 4.0,
         };
         let mut data = GameData::default();
         data.equipment.insert("infantry_equipment_1".into(), inf_eq());

@@ -15,6 +15,20 @@ const COMBAT_MOVEMENT_SPEED: f64 = 0.33;
 /// 占领省份时 org 损失比例(原版 ORG_LOSS_FACTOR_ON_CONQUER)
 const ORG_LOSS_ON_CONQUER: f64 = 0.2;
 
+/// 省份地形移动成本(对齐原版 common/terrain/00_terrain.txt 的 movement_cost)。
+/// plains 1.0 / forest hills jungle 1.5 / mountain marsh 2.0 / urban 1.2 / desert 1.05。
+/// 未知地形回退 1.0(平原)。乘到移动时间上(成本越高走得越慢)。
+fn terrain_movement_cost(world: &World, province_id: u32) -> f64 {
+    let terrain = world.provinces.get(&province_id).map(|p| p.terrain.as_str()).unwrap_or("plains");
+    match terrain {
+        "plains" | "desert" => 1.0,
+        "forest" | "hills" | "jungle" => 1.5,
+        "mountain" | "marsh" => 2.0,
+        "urban" => 1.2,
+        _ => 1.0,
+    }
+}
+
 /// 每小时检查: Moving/Pending 的师, 目标地块有敌军 → 立刻开战
 /// (交战由"地块有无敌军"决定, 非到达决定)
 ///
@@ -144,26 +158,45 @@ pub fn advance_movement(world: &mut World) {
         // 进度条是物理移动, 照常推进(战斗中只是变慢, hostile×0.33)。
         let mut arrived: Vec<(u64, u32, String, bool, Vec<u32>)> = Vec::new();
         for id in moving_ids {
-            let Some(d) = world.divisions.get_mut(&id) else { continue };
-            // 按状态决定速度系数
-            let rate = match d.order {
-                OrderState::Retreating { .. } => MOVE_RATE * (1.0 + RETREAT_SPEED_BONUS),
-                OrderState::Moving { hostile: true, .. } => MOVE_RATE * COMBAT_MOVEMENT_SPEED,
-                OrderState::Moving { hostile: false, .. } => MOVE_RATE,
-                _ => continue,
+            // 快照移动参数(避借用冲突: 算距离要借 world, d 已 &mut)
+            let (max_speed, origin, dest_opt) = match world.divisions.get(&id) {
+                Some(d) => match d.order {
+                    OrderState::Moving { origin, dest, .. } => (d.max_speed, origin, Some(dest)),
+                    OrderState::Retreating { dest, .. } => (d.max_speed, d.location_province, Some(dest)),
+                    _ => (0.0, 0, None),
+                },
+                None => continue,
             };
-            let reached = match d.order {
-                OrderState::Moving { ref mut progress, .. } => {
-                    *progress += rate;
-                    *progress >= 1.0
-                }
-                OrderState::Retreating { ref mut progress, .. } => {
-                    *progress += rate;
-                    *progress >= 1.0
-                }
-                _ => false,
+            let Some(dest) = dest_opt else { continue };
+            // 移动公式(对齐原版): 每小时推进度 = max_speed(km/h) / (距离km × 地形成本)
+            //   - 距离 = 两省重心欧氏距离(km)
+            //   - 地形成本: plains 1.0 / forest hills 1.5 / mountain marsh 2.0 / urban 1.2(原版 terrain.txt)
+            //   - 战斗中(hostile)额外 × COMBAT_MOVEMENT_SPEED(0.33)
+            //   - 撤退额外 × (1 + RETREAT_SPEED_BONUS)
+            let distance = world.province_distance(origin, dest).max(1.0);
+            let terrain_cost = terrain_movement_cost(world, dest);
+            let base_rate = if max_speed > 0.0 { max_speed / (distance * terrain_cost) } else { MOVE_RATE };
+            let rate = match world.divisions.get(&id).map(|d| &d.order) {
+                Some(OrderState::Retreating { .. }) => base_rate * (1.0 + RETREAT_SPEED_BONUS),
+                Some(OrderState::Moving { hostile: true, .. }) => base_rate * COMBAT_MOVEMENT_SPEED,
+                _ => base_rate,
+            };
+            let reached = match world.divisions.get_mut(&id) {
+                Some(d) => match d.order {
+                    OrderState::Moving { ref mut progress, .. } => {
+                        *progress += rate;
+                        *progress >= 1.0
+                    }
+                    OrderState::Retreating { ref mut progress, .. } => {
+                        *progress += rate;
+                        *progress >= 1.0
+                    }
+                    _ => false,
+                },
+                None => false,
             };
             if reached {
+                let Some(d) = world.divisions.get_mut(&id) else { continue };
                 // 规则3: Moving 师自身在战场里 → 进度满也不变更归属地。
                 // 保持 Moving 状态(进度满), 等战斗结束(师离开 battle 列表)后下 tick 再结算。
                 // Retreating 师对战场不可见(不在 battle 列表), 不受此限制。
@@ -392,6 +425,32 @@ mod tests {
         advance_movement(&mut w);
         assert_eq!(w.divisions.get(&did).unwrap().location_province, 2);
         assert!(w.divisions.get(&did).unwrap().is_idle(), "到达后应转 Idle");
+    }
+
+    #[test]
+    fn t_armor_moves_faster_than_infantry() {
+        // 移动公式(对齐原版): max_speed/(距离×地形成本)。装甲(12)应比步兵(4)推进快。
+        let mut w = World::new();
+        add_test_province(&mut w, 1, "X", "plains", vec![2]);
+        add_test_province(&mut w, 2, "X", "plains", vec![1]);
+        let inf = Division {
+            id: 0, owner_tag: "X".into(), location_province: 1, max_speed: 4.0,
+            order: OrderState::Moving { dest: 2, progress: 0.0, hostile: false, origin: 1, remaining: vec![] },
+            ..Default::default()
+        };
+        let arm = Division {
+            id: 0, owner_tag: "X".into(), location_province: 1, max_speed: 12.0,
+            order: OrderState::Moving { dest: 2, progress: 0.0, hostile: false, origin: 1, remaining: vec![] },
+            ..Default::default()
+        };
+        let inf_id = w.add_division(inf);
+        let arm_id = w.add_division(arm);
+        advance_movement(&mut w);  // 推进 1 小时
+        let inf_prog = w.divisions.get(&inf_id).unwrap().move_progress();
+        let arm_prog = w.divisions.get(&arm_id).unwrap().move_progress();
+        assert!(arm_prog > inf_prog, "装甲应比步兵推进快: 装甲{} 步兵{}", arm_prog, inf_prog);
+        // 装甲速度是步兵 3 倍 → 推进度也应约 3 倍(同距离同地形)
+        assert!((arm_prog / inf_prog - 3.0).abs() < 0.01, "速度比应≈3: 实际{}", arm_prog / inf_prog);
     }
 
     #[test]

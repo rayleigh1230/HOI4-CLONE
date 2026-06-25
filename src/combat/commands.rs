@@ -51,6 +51,7 @@ fn build_division_from_stats(owner: &str, loc: u32, stats: DivisionStats, templa
         piercing: stats.piercing,
         hardness: stats.hardness,
         combat_width: stats.combat_width,
+        max_speed: stats.max_speed,
         max_org: stats.max_org,
         org: stats.max_org,
         max_strength: stats.max_strength,
@@ -255,6 +256,7 @@ pub fn register(reg: &mut Registry) {
             piercing: pr,
             hardness: hd,
             combat_width: cw,
+            max_speed: 4.0,  // 旧路径无模板, 默认步兵速度
             max_org,
             org: max_org,
             max_strength: max_str,
@@ -666,6 +668,7 @@ pub fn register(reg: &mut Registry) {
         d.piercing = stats.piercing;
         d.hardness = stats.hardness;
         d.combat_width = stats.combat_width;
+        d.max_speed = stats.max_speed;
         d.max_org = stats.max_org;
         d.max_strength = stats.max_strength;
         d.manpower_need = stats.manpower_need;

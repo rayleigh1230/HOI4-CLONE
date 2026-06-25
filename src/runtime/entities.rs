@@ -96,6 +96,9 @@ pub struct Division {
     pub piercing: f64,
     pub hardness: f64,
     pub combat_width: f64,
+    /// 师速度上限(km/h)。建师时从模板汇总(最慢营); 换模板更新。
+    /// 移动用: 每小时推进度 = max_speed / (省间距离km × 地形成本)。
+    pub max_speed: f64,
     // 当前状态
     pub max_org: f64,
     pub org: f64,

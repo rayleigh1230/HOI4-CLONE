@@ -40,6 +40,8 @@ pub struct DivisionStats {
     pub max_org: f64,
     pub max_strength: f64,
     pub manpower_need: f64,
+    /// 师速度上限(km/h)。原版: 取最慢营的 max_speed(最小值)。无营默认 4.0。
+    pub max_speed: f64,
     pub equipment_need: HashMap<String, f64>,
 }
 
@@ -80,6 +82,10 @@ impl DivisionTemplate {
             stats.max_strength += su.max_strength;
             stats.manpower_need += su.manpower;
         }
+
+        // 师速度: 取最慢营(最小 max_speed)。无营默认 4.0。对齐原版。
+        stats.max_speed = regiments.iter().map(|(su, _)| su.max_speed)
+            .fold(4.0_f64, f64::min);
 
         // 加权混合(60%平均 + 40%最高): armor / piercing
         let n = regiments.len() as f64;
@@ -256,6 +262,7 @@ mod tests {
                 manpower: 1000.0,
                 need: HashMap::from([("infantry_equipment_1".into(), 100.0)]),
                 battalion_mults: vec![],
+                max_speed: 4.0,
             },
         );
         d
@@ -316,6 +323,7 @@ mod tests {
                 manpower: 500.0,
                 need: HashMap::from([("med_tank".into(), 50.0)]),
                 battalion_mults: vec![],
+                max_speed: 12.0,
             },
         );
         // 1步(armor0) + 1甲(armor50): avg=25, max=50 → 0.6×25+0.4×50 = 15+20 = 35
@@ -370,6 +378,7 @@ mod tests {
                 manpower: 300.0,
                 need: HashMap::new(),
                 battalion_mults: vec![],
+                max_speed: 4.0,
             },
         );
         let tmpl = DivisionTemplate {

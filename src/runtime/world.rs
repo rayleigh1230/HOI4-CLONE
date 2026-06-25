@@ -241,6 +241,27 @@ impl World {
         })
     }
 
+    /// 省份重心坐标(世界坐标, 与前端 layout.js 网格一致)。
+    /// demo 用 5列×2排: 省1-5上排(y=195), 省6-10下排(y=505); 列中心 x=(col-0.5)*200。
+    /// 移动距离用: 两省重心欧氏距离 = km。对齐原版"省间距离影响移动时间"。
+    pub fn province_position(&self, province_id: u32) -> Option<(f64, f64)> {
+        if (1..=10).contains(&province_id) {
+            let col = if province_id <= 5 { province_id } else { province_id - 5 };
+            let x = (col as f64 - 0.5) * 200.0;
+            let y = if province_id <= 5 { 195.0 } else { 505.0 };
+            return Some((x, y));
+        }
+        None
+    }
+
+    /// 两省间移动距离(km = 重心欧氏距离)。找不到坐标回退默认 200(约一列宽)。
+    pub fn province_distance(&self, a: u32, b: u32) -> f64 {
+        match (self.province_position(a), self.province_position(b)) {
+            (Some((ax, ay)), Some((bx, by))) => ((ax - bx).powi(2) + (ay - by).powi(2)).sqrt(),
+            _ => 200.0,
+        }
+    }
+
     // 战斗宽度(陆战循环)
     /// 一组师占用的战斗宽度总和
     pub fn used_width(&self, div_ids: &[u64]) -> f64 {
@@ -331,6 +352,7 @@ mod tests {
             id: 0, owner_tag: "GER".into(), location_province: 1,
             soft_attack: 10.0, hard_attack: 1.0, defense: 20.0, breakthrough: 5.0,
             armor: 0.0, piercing: 5.0, hardness: 0.0, combat_width: 10.0,
+            max_speed: 4.0,
             max_org: 60.0, org: 60.0, max_strength: 20.0, strength: 20.0,
             ..Default::default()
         };
