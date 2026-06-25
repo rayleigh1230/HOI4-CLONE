@@ -115,6 +115,12 @@ impl World {
         }
     }
 
+    /// 当前国家 tag 的 owned 副本(供命令快照后 get_mut, 避借用冲突)。
+    /// 语义同 current_country(): 栈优先回退 player_tag; 无则 None。
+    pub fn current_country_tag(&self) -> Option<String> {
+        self.current_country().map(|s| s.to_string())
+    }
+
     // M3 实体管理
     pub fn add_division(&mut self, mut d: Division) -> u64 {
         d.id = self.next_division_id;
