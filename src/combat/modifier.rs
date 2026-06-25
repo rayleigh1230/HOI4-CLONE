@@ -19,6 +19,10 @@ pub enum ModifierStat {
     CombatWidth,
     // 组织度恢复率
     OrgRegain,
+    // ★ 资源属性(国家级三件套)
+    Stability,        // stability / stability_factor
+    WarSupport,       // war_support / war_support_factor
+    PoliticalPower,   // political_power / political_power_factor
 }
 
 /// 修正的叠加方式(由属性名后缀推导)
@@ -114,6 +118,9 @@ pub fn parse_modifier_token(s: &str) -> Option<(ModifierStat, ModifierOp)> {
         "piercing" | "ap_attack" => ModifierStat::Piercing,
         "combat_width" => ModifierStat::CombatWidth,
         "org_regain" | "local_org_regain" => ModifierStat::OrgRegain,
+        "stability" => ModifierStat::Stability,
+        "war_support" => ModifierStat::WarSupport,
+        "political_power" => ModifierStat::PoliticalPower,
         _ => return None,
     };
     Some((stat, op))
@@ -270,9 +277,33 @@ mod tests {
 
     #[test]
     fn t_parse_unknown_returns_none() {
-        assert!(parse_modifier_token("stability_factor").is_none());
+        // 真正未知的属性仍返回 None(stability/political_power 现在是已知资源属性, 见 t_parse_resource_tokens)
         assert!(parse_modifier_token("ace_effectiveness_factor").is_none());
-        assert!(parse_modifier_token("political_power").is_none());
+        assert!(parse_modifier_token("research_speed").is_none());
+        assert!(parse_modifier_token("foo_bar").is_none());
+    }
+
+    #[test]
+    fn t_parse_resource_tokens() {
+        // 资源属性三件套: 无后缀=Add, _factor=Multiply(对齐原版)
+        let (s, op) = parse_modifier_token("stability").unwrap();
+        assert_eq!(s, ModifierStat::Stability);
+        assert_eq!(op, ModifierOp::Add);
+        let (s, op) = parse_modifier_token("stability_factor").unwrap();
+        assert_eq!(s, ModifierStat::Stability);
+        assert_eq!(op, ModifierOp::Multiply);
+
+        let (s, op) = parse_modifier_token("war_support").unwrap();
+        assert_eq!(s, ModifierStat::WarSupport);
+        assert_eq!(op, ModifierOp::Add);
+        let (s, _) = parse_modifier_token("war_support_factor").unwrap();
+        assert_eq!(s, ModifierStat::WarSupport);
+
+        let (s, op) = parse_modifier_token("political_power").unwrap();
+        assert_eq!(s, ModifierStat::PoliticalPower);
+        assert_eq!(op, ModifierOp::Add);
+        let (s, _) = parse_modifier_token("political_power_factor").unwrap();
+        assert_eq!(s, ModifierStat::PoliticalPower);
     }
 
     use crate::runtime::{Battle, World};
