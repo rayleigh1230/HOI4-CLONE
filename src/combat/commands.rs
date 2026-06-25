@@ -612,6 +612,40 @@ pub fn register(reg: &mut Registry) {
         Ok(())
     });
 
+    // 换师的模板(重新汇总数值, 保留运行态 location/org/strength)
+    // 对齐原版 add_units_to_division_template 的"师↔模板引用"语义
+    reg.register("change_template", |w, p| {
+        let div_id = num_of(np(p, "change_template", "division")?)? as u64;
+        let tmpl_name = np(p, "change_template", "template")?.as_str()
+            .ok_or_else(|| CmdError::RuntimeError("template 应为字符串".into()))?;
+        let (stats, warnings) = match w.data.templates.get(tmpl_name) {
+            Some(t) => t.to_division_stats(&w.data),
+            None => return Err(CmdError::RuntimeError(format!("未知模板: {tmpl_name}"))),
+        };
+        for warn in &warnings {
+            eprintln!("[change_template] ⚠️ {warn}");
+        }
+        let d = w.divisions.get_mut(&div_id)
+            .ok_or_else(|| CmdError::RuntimeError(format!("师 #{div_id} 不存在")))?;
+        // 覆盖战斗属性(模板汇总)
+        d.soft_attack = stats.soft_attack;
+        d.hard_attack = stats.hard_attack;
+        d.defense = stats.defense;
+        d.breakthrough = stats.breakthrough;
+        d.armor = stats.armor;
+        d.piercing = stats.piercing;
+        d.hardness = stats.hardness;
+        d.combat_width = stats.combat_width;
+        d.max_org = stats.max_org;
+        d.max_strength = stats.max_strength;
+        d.manpower_need = stats.manpower_need;
+        // 装备需求更新(held 保持当前持有, 不强制满编——换模板可能缺装备)
+        d.equipment_need = stats.equipment_need.clone();
+        d.template_name = Some(tmpl_name.to_string());
+        // 运行态保留: location_province / org / strength / order / modifiers 不动
+        Ok(())
+    });
+
     // trigger: 当前作用域师是否破阵
     reg.register_trigger("is_broken", |w, _p| {
         if let Some(did) = w.current_scope().division_id() {

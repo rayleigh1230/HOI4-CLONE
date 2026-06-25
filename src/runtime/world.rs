@@ -301,37 +301,71 @@ mod tests {
         assert!(!w.data.sub_units.is_empty(), "应含营定义");
     }
 
-    /// 辅助: 用 Registry + Interpreter 跑脚本建场景(命令测试用)
-    fn run_script(script: &str) {
+    /// 辅助: 用 Registry + Interpreter 跑脚本, 返回 World(命令测试用)
+    fn run_script_world(scripts: &[&str]) -> World {
         use crate::ast::lower::lower_effects;
         use crate::runtime::{Interpreter, Registry};
-        thread_local! { static INTERP: std::cell::RefCell<Option<Interpreter>> = std::cell::RefCell::new(None); }
-        // 简化: 每次新建(测试隔离)
         let mut reg = Registry::new();
         crate::commands::register_all(&mut reg);
         crate::combat::commands::register(&mut reg);
-        let b = crate::parser::parse(script).unwrap();
-        let effs = lower_effects(&b);
         let mut interp = Interpreter::new(reg);
-        // 用一个临时 World 跑(测试只验证命令能跑通 + 字段)
         let mut w = World::new();
-        interp.run(&effs, &mut w);
-        // 把 w 存到 thread_local 供断言 — 简化: 直接在此断言
-        if script.contains("create_division") {
-            let div = w.divisions.values().next();
-            assert!(div.is_some(), "应建出师");
-            let div = div.unwrap();
-            assert_eq!(div.template_name.as_deref(), Some("Infanterie-Division"),
-                "create_division template= 应记录 template_name");
+        for s in scripts {
+            let b = crate::parser::parse(s).unwrap();
+            let effs = lower_effects(&b);
+            interp.run(&effs, &mut w);
         }
+        w
     }
 
     #[test]
     fn t_create_division_records_template_name() {
         // create_division template= 应把模板名记进 Division.template_name
-        let script = "create_state = { id = 1 owner = GER }
-            create_province = { id = 1 state = 1 }
-            create_division = { owner = GER location = 1 template = \"Infanterie-Division\" }";
-        run_script(script);
+        let w = run_script_world(&[
+            "create_state = { id = 1 owner = GER }",
+            "create_province = { id = 1 state = 1 }",
+            "create_division = { owner = GER location = 1 template = \"Infanterie-Division\" }",
+        ]);
+        let div = w.divisions.values().next().expect("应建出师");
+        assert_eq!(div.template_name.as_deref(), Some("Infanterie-Division"),
+            "create_division template= 应记录 template_name");
+    }
+
+    #[test]
+    fn t_change_template_updates_stats_keeps_runtime() {
+        // 换模板: 数值更新 + template_name 更新 + 运行态(org/strength)保留
+        let mut w = run_script_world(&[
+            "create_state = { id = 1 owner = GER }",
+            "create_province = { id = 1 state = 1 }",
+            "create_division = { owner = GER location = 1 template = \"Infanterie-Division\" }",
+        ]);
+        let div_id = w.divisions.values().next().unwrap().id;
+        let inf_armor_before = w.divisions.get(&div_id).unwrap().armor;
+        // 模拟战斗后运行态
+        {
+            let d = w.divisions.get_mut(&div_id).unwrap();
+            d.org = 30.0;
+            d.strength = 100.0;
+        }
+        // 换装甲模板
+        run_script_world_on(&mut w, "change_template = { division = 1 template = \"Panzer-Division\" }");
+        let d = w.divisions.get(&div_id).unwrap();
+        assert!(d.armor > inf_armor_before, "换装甲模板后 armor 应升高(前{inf_armor_before} 后{})", d.armor);
+        assert_eq!(d.template_name.as_deref(), Some("Panzer-Division"), "template_name 应更新");
+        assert!((d.org - 30.0).abs() < 1e-9, "换模板应保留 org, 实际 {}", d.org);
+        assert!((d.strength - 100.0).abs() < 1e-9, "换模板应保留 strength, 实际 {}", d.strength);
+    }
+
+    /// 辅助: 在已有 World 上跑单个脚本(原地修改)
+    fn run_script_world_on(w: &mut World, script: &str) {
+        use crate::ast::lower::lower_effects;
+        use crate::runtime::{Interpreter, Registry};
+        let mut reg = Registry::new();
+        crate::commands::register_all(&mut reg);
+        crate::combat::commands::register(&mut reg);
+        let mut interp = Interpreter::new(reg);
+        let b = crate::parser::parse(script).unwrap();
+        let effs = lower_effects(&b);
+        interp.run(&effs, w);
     }
 }
