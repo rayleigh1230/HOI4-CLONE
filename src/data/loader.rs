@@ -224,12 +224,40 @@ fn build_equipment(
         .values()
         .filter_map(|mname| data.modules.get(mname).cloned())
         .collect();
-    // base: 型号若直接写了战斗数值, 用型号的; 否则用 archetype 的
-    let base = if has_own_stats(entry) {
-        chassis.base_stats.clone()
-    } else {
-        archetype.base_stats.clone()
-    };
+    // base: 原版继承语义 — archetype 的 base_stats 为底, 型号写了的字段覆盖, 没写的继承 archetype。
+    // (原版 parent/archetype 继承链: 型号只覆盖自己显式写的属性, 其余继承父级。)
+    // 之前是"全有或全无"(型号写了任一数值就用型号全部 base), 导致型号没写的 hardness 等丢失。
+    let mut base = archetype.base_stats.clone();
+    let model_stats = extract_stats(entry);
+    let written_keys: std::collections::HashSet<&str> = entry
+        .fields
+        .iter()
+        .filter_map(|f| match f.key.as_str() {
+            "soft_attack" | "hard_attack" | "defense" | "breakthrough" | "armor_value"
+            | "ap_attack" | "hardness" | "build_cost_ic" | "maximum_speed" | "reliability" => {
+                Some(f.key.as_str())
+            }
+            _ => None,
+        })
+        .collect();
+    // 仅型号显式写了的字段才覆盖
+    macro_rules! overlay {
+        ($field:ident, $key:literal) => {
+            if written_keys.contains($key) {
+                base.$field = model_stats.$field;
+            }
+        };
+    }
+    overlay!(soft_attack, "soft_attack");
+    overlay!(hard_attack, "hard_attack");
+    overlay!(defense, "defense");
+    overlay!(breakthrough, "breakthrough");
+    overlay!(armor, "armor_value");
+    overlay!(piercing, "ap_attack");
+    overlay!(hardness, "hardness");
+    overlay!(build_cost_ic, "build_cost_ic");
+    overlay!(maximum_speed, "maximum_speed");
+    overlay!(reliability, "reliability");
     let stats = compute_equipment_stats(&base, &modules);
 
     Some(EquipmentDef {
@@ -242,6 +270,8 @@ fn build_equipment(
 }
 
 /// 型号是否直接写了战斗数值(armor_value/soft_attack 等)
+/// 注: build_equipment 现在用字段级合并(archetype base + 型号覆盖), 此函数保留供判断"型号有无任何覆盖"
+#[allow(dead_code)]
 fn has_own_stats(block: &Block) -> bool {
     block.fields.iter().any(|f| {
         matches!(
@@ -529,6 +559,34 @@ mod tests {
         // light_armor 营应加载(装甲师用)
         let data = crate::data::loader::load_all();
         assert!(data.sub_units.contains_key("light_armor"), "应加载 light_armor 营");
+    }
+
+    #[test]
+    fn t_panzer_division_has_nonzero_armor() {
+        // 装甲师 armor 应 > 0(light_armor 营已加载, 不再被静默丢弃)
+        let data = crate::data::loader::load_all();
+        let panzer = data.templates.get("Panzer-Division").expect("GER 装甲模板应存在");
+        let (stats, warnings) = panzer.to_division_stats(&data);
+        // motorized 营已随 infantry.txt 加载(原版合集文件), 但支援连 mot_recon/engineer 未加载
+        // → 应有支援连告警(不阻断战斗营汇总)
+        assert!(warnings.iter().any(|w| w.contains("mot_recon")), "应有 mot_recon 未知营告警, 实际 {:?}", warnings);
+        assert!(stats.armor > 0.0, "Panzer-Division armor 应 > 0, 实际 {}", stats.armor);
+        assert!(stats.hardness > 0.3, "Panzer-Division hardness 应 > 0.3(含装甲营), 实际 {}", stats.hardness);
+    }
+
+    #[test]
+    fn t_light_tank_variant_inherits_hardness() {
+        // 型号未写的属性应继承 archetype(light_tank_chassis_2 没写 hardness, 应继承 archetype 的 0.8)
+        let mut data = GameData::default();
+        load_modules(&mut data, include_str!("../data_raw/modules/00_tank_modules.txt"));
+        load_chassis(&mut data, include_str!("../data_raw/equipment/tank_chassis.txt"));
+        let e = data.equipment.get("light_tank_chassis_2")
+            .expect("应产出 light_tank_chassis_2 型号");
+        assert!(
+            e.stats.hardness > 0.5,
+            "light_tank_chassis_2 hardness 应继承 archetype(>0.5), 实际 {} (型号未写 hardness 应继承)",
+            e.stats.hardness
+        );
     }
 
     #[test]
