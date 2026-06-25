@@ -273,9 +273,33 @@ pub fn load_sub_units(data: &mut GameData, src: &str) {
 
 /// 解析模板文件(history/units/*.txt, 即 OOB 文件)
 /// 一个文件可含多个 division_template 块
+///
+/// 容错: 原版 OOB 文件有时大括号不严格平衡(如 FRA_1936.txt 末尾少一个 }),
+/// 原版 Paradox 引擎按块独立提取, 容忍文件级不平衡。这里对齐该行为:
+/// 严格 parse 失败(UnexpectedEof)时, 尝试在末尾补 } 重试(最多补 3 个)。
+/// 仅 OOB 数据加载走此容错路径; 运行时命令脚本仍用严格 parse。
 pub fn load_templates(data: &mut GameData, src: &str) {
     let block = match crate::parser::parse(src) {
         Ok(b) => b,
+        Err(crate::parser::ParseError::UnexpectedEof) => {
+            // 容错恢复: 逐个补 } 重试, 直到成功或补满 3 个仍失败
+            let mut recovered = None;
+            for extra in 1..=3 {
+                let patched = format!("{src}\n{}", "}".repeat(extra));
+                if let Ok(b) = crate::parser::parse(&patched) {
+                    eprintln!("[data] OOB 文件大括号不平衡, 补 {extra} 个 }} 后恢复解析");
+                    recovered = Some(b);
+                    break;
+                }
+            }
+            match recovered {
+                Some(b) => b,
+                None => {
+                    eprintln!("[data] 警告: 模板文件解析失败且容错恢复无效");
+                    return;
+                }
+            }
+        }
         Err(e) => {
             eprintln!("[data] 警告: 模板文件解析失败: {:?}", e);
             return;
@@ -311,9 +335,11 @@ pub fn load_all() -> GameData {
     load_sub_units(&mut data, include_str!("../data_raw/units/infantry.txt"));
     load_sub_units(&mut data, include_str!("../data_raw/units/artillery.txt"));
     load_sub_units(&mut data, include_str!("../data_raw/units/medium_armor.txt"));
+    load_sub_units(&mut data, include_str!("../data_raw/units/light_armor.txt"));
 
     // 阶段4: 模板(依赖营) — OOB 文件(history/units/*.txt)
     load_templates(&mut data, include_str!("../data_raw/history/GER.txt"));
+    load_templates(&mut data, include_str!("../data_raw/history/FRA.txt"));
 
     data
 }
@@ -496,5 +522,19 @@ mod tests {
             .any(|k| k.starts_with("infantry_equipment_"));
         assert!(has_inf_eq, "应存在 infantry_equipment_* 型号, 实际装备: {:?}",
             data.equipment.keys().collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn t_load_all_has_light_armor_subunit() {
+        // light_armor 营应加载(装甲师用)
+        let data = crate::data::loader::load_all();
+        assert!(data.sub_units.contains_key("light_armor"), "应加载 light_armor 营");
+    }
+
+    #[test]
+    fn t_load_all_has_fra_templates() {
+        // FRA OOB 模板应加载
+        let data = crate::data::loader::load_all();
+        assert!(data.templates.contains_key("Division d'Infanterie"), "应加载 FRA 步兵模板");
     }
 }

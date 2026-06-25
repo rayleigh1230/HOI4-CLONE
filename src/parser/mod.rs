@@ -4,3 +4,4 @@ pub mod block;
 
 pub use block::{Block, Field, Value};
 pub use block::parse;
+pub use error::ParseError;
