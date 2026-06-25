@@ -469,12 +469,13 @@ fn serialize_state(world: &World) -> String {
             None => "null".to_string(),
         };
         s.push_str(&format!(
-            "{{\"id\":{},\"owner\":\"{}\",\"org\":{:.1},\"max_org\":{:.0},\"str\":{:.1},\"max_str\":{:.0},\"eq_ratio\":{:.2},\"mp_ratio\":{:.2},\"loc\":{},\"dest\":{},\"pending\":{},\"progress\":{:.3},\"supporting\":{},\"attacking\":{},\"retreating\":{},\"annihilated\":{},\"path\":[{}],\"template\":{}}}",
+            "{{\"id\":{},\"owner\":\"{}\",\"org\":{:.1},\"max_org\":{:.0},\"str\":{:.1},\"max_str\":{:.0},\"eq_ratio\":{:.2},\"mp_ratio\":{:.2},\"loc\":{},\"dest\":{},\"pending\":{},\"progress\":{:.3},\"supporting\":{},\"attacking\":{},\"retreating\":{},\"annihilated\":{},\"path\":[{}],\"template\":{},\"soft_attack\":{:.0},\"hard_attack\":{:.0},\"defense\":{:.0},\"breakthrough\":{:.0},\"armor\":{:.0},\"piercing\":{:.0},\"combat_width\":{:.1}}}",
             d.id, d.owner_tag, d.org, d.max_org, d.strength, d.max_strength,
             d.equipment_ratio_only(), d.manpower_ratio(),
             d.location_province,
             dest, pending, progress, supporting,
-            attacking, retreating, d.is_annihilated(), path_str, template_json
+            attacking, retreating, d.is_annihilated(), path_str, template_json,
+            d.soft_attack, d.hard_attack, d.defense, d.breakthrough, d.armor, d.piercing, d.combat_width
         ));
     }
     s.push_str("],\"battles\":[");
