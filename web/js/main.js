@@ -1,7 +1,7 @@
 // 启动入口: 装配 WASM + store + canvas + input + 图层 + 完整 setup
 import { loadWasm } from './engine/wasm.js';
 import { getState } from './engine/state.js';
-import { setPlayer, runSetup, tick, deployTemplate, supply } from './engine/commands.js';
+import { setPlayer, runSetup, tick, deployTemplate, supply, moveDivision } from './engine/commands.js';
 import { store } from './core/store.js';
 import * as canvas from './core/canvas.js';
 import * as input from './core/input.js';
@@ -35,6 +35,7 @@ let autoTimer = null;
 export function refresh() {
   store.setState(getState());
   canvas.render(store.state);
+  window._store = store;  // 调试钩子: 供 Playwright 验证读 store.state(非生产代码, 但无害)
 }
 
 export function doTick(h) {
@@ -199,8 +200,13 @@ declare_war = { attacker = GER defender = FRA }
   deployTemplate('FRA', 7, 'Division d\'Infanterie');
   deployTemplate('FRA', 8, 'Division d\'Infanterie');
 
+  // 让 GER 师进攻 FRA 前线省(省7 有 FRA 驻军), 制造初始战斗 —
+  // 这样一进 demo 就有战斗可视化内容(战斗小圆/战斗面板), 便于展示。
+  // 玩家可观察战斗进程; 战斗结束后可再下令制造新战斗。
+  moveDivision(1, 7);  // GER 师_gateway 1(省1)→省7(FRA), 邻接, 触发战斗
+
   refresh();
-  console.log('[demo] ✓ 引擎+图层跑通, 10省对垒, GER vs FRA, 4 个师(步+甲)');
+  console.log('[demo] ✓ 引擎+图层跑通, 10省对垒, GER vs FRA, 4 个师(步+甲), GER 进攻省7');
   requestAnimationFrame(animLoop);  // 启动动画循环(前线/战斗脉冲)
 }
 

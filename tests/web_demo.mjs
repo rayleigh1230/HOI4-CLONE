@@ -98,13 +98,64 @@ check('顶栏显示日期', /📅|1936|\d+\.\d+\.\d+/.test(topbarText), topbarTe
 check('顶栏含系统按钮(部署/外交等)', /部署|外交|部队|交战/.test(topbarText));
 check('底栏含时间控制按钮(spec §7.1)', /流逝|时|日/.test(bottombarText), bottombarText.trim().slice(0, 30));
 
-// 6. 交互闭环: 点击地图中央 → 弹抽屉或选中高亮
-//    先取一个省份屏幕坐标(用 demo 的布局: 上排 GER 在 y≈0.27H)
-const provincesBefore = await page.evaluate(() => null);
-await page.mouse.click(640, 250); // 上排中部(GER 区域)
+// 6. 交互闭环: 点击地图省份 → 弹抽屉(多边形命中)。点省1重心(列1上排, 世界(100,195))
+//    屏幕坐标 = 世界*zoom+cam, fit 后算出
+const clickProv = await page.evaluate(() => {
+  const W = window.innerWidth, H = window.innerHeight, margin = 20, WW = 1000, WH = 700;
+  const zoom = Math.min((W - margin * 2) / WW, (H - margin * 2) / WH);
+  const camX = W / 2 - WW / 2 * zoom, camY = H / 2 - WH / 2 * zoom;
+  // 省1重心(列1上排) = (100, 195)
+  return { x: 100 * zoom + camX, y: 195 * zoom + camY };
+});
+await page.mouse.click(clickProv.x, clickProv.y);
 await page.waitForTimeout(400);
 const drawerOpen = await page.locator('#drawer').evaluate(el => el.classList.contains('open'));
-check('点击地图弹抽屉(交互闭环)', drawerOpen, 'drawer.open=' + drawerOpen);
+check('点击省份弹抽屉(多边形命中)', drawerOpen, 'drawer.open=' + drawerOpen);
+
+// 6b. 战斗图标点击开战斗面板(spec §5.1/§5.4)。demo setup 含 GER 进攻省7, 进 demo 即有战斗。
+const combatInfo = await page.evaluate(() => {
+  if (!window._store) return null;
+  const bs = window._store.state.battles;
+  if (!bs.length) return { battles: 0 };
+  // 算战斗图标屏幕坐标(复刻 layerCombat + canvas 坐标)
+  const W = window.innerWidth, H = window.innerHeight, margin = 20, WW = 1000, WH = 700;
+  const zoom = Math.min((W - margin * 2) / WW, (H - margin * 2) / WH);
+  const camX = W / 2 - WW / 2 * zoom, camY = H / 2 - WH / 2 * zoom;
+  const b = bs[0];
+  const col = b.prov <= 5 ? b.prov : b.prov - 5;          // 列1-5
+  const row = b.prov <= 5 ? 0 : 1;                         // 上排0/下排1
+  const cx = (col - 0.5) * 200, cy = row === 0 ? 195 : 505; // 列中心x, 排中心y
+  return { battles: bs.length, x: cx * zoom + camX, y: (cy - 50) * zoom + camY };
+});
+check('demo 初始有战斗(GER 进攻省7)', combatInfo?.battles > 0, 'battles=' + combatInfo?.battles);
+if (combatInfo?.battles > 0) {
+  // 关闭抽屉再点战斗图标
+  await page.locator('#drawer').evaluate(el => el.classList.remove('open'));
+  await page.mouse.click(combatInfo.x, combatInfo.y);
+  await page.waitForTimeout(500);
+  const combatPanelOpen = await page.locator('#panel-host').evaluate(el => el.classList.contains('open'));
+  check('点击战斗图标开战斗面板(landcombatview)', combatPanelOpen, 'panel.open=' + combatPanelOpen);
+}
+
+// 6c. 多边形地形渲染: 采样含地形绿色调像素(spec §3.1)
+const terrainCheck = await page.locator('#map').evaluate(c => {
+  const ctx = c.getContext('2d');
+  const img = ctx.getImageData(0, 0, c.width, c.height).data;
+  let greenish = 0;
+  for (let i = 0; i < img.length; i += 32) {
+    if (img[i+1] > img[i] && img[i+1] > 40 && img[i+1] < 120 && img[i] < 100) greenish++;
+  }
+  return greenish;
+});
+check('地形多边形渲染(含绿色调像素)', terrainCheck > 20, `绿色调采样=${terrainCheck}`);
+
+// 6d. get_state division 含新战斗属性字段(Task 1)
+const hasFields = await page.evaluate(() => {
+  const d = window._store?.state?.divisions?.[0];
+  if (!d) return false;
+  return d.soft_attack != null && d.defense != null && d.combat_width != null;
+});
+check('get_state 含战斗属性字段(soft/defense/width)', hasFields);
 
 // 7. tick: 点底栏 +1时 按钮, 日期/hour 应推进
 const beforeTick = await page.evaluate(() => document.querySelector('#bottombar').innerText);
