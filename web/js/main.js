@@ -2,7 +2,7 @@
 import { loadWasm } from './engine/wasm.js';
 import { getState } from './engine/state.js';
 import { setPlayer, runSetup, tick, deployTemplate, supply } from './engine/commands.js';
-import { store, subscribe } from './core/store.js';
+import { store } from './core/store.js';
 import * as canvas from './core/canvas.js';
 import * as input from './core/input.js';
 import * as terrain from './map/layerTerrain.js';
@@ -69,9 +69,6 @@ async function main() {
 
   // 顶栏渲染
   import('./ui/topbar.js').then(({ render }) => render());
-
-  // 渲染循环: store 变化 → canvas 重绘
-  subscribe(() => canvas.render(store.state));
 
   // ===== 两段式交互(选师→点省弹菜单 / 点省弹抽屉) =====
   let selectedDiv = null;
@@ -161,7 +158,7 @@ async function main() {
   // 部署函数暴露到全局(顶栏/部署面板调用)
   window._deployTemplate = (tmpl) => { deployTarget = tmpl; };
 
-                }));
+                });
               });
             });
           });
