@@ -1,7 +1,7 @@
 # hoi4-clone 项目交接文档
 
 > **用途**: 在新会话中继续开发。读本文件 + 列出的关键文件即可接上。
-> **更新**: 2026-06-25(游戏逻辑层完善 — 占领省份级/国家视角权限/省间距离+师速度/外交系统/拖拽下令交互; **测试基线修复**: 191 测试全绿 = 126 内联 + 48 battle + 13 integration + 3 scope + 1 teleport; 见下方"测试基线修复"小节)
+> **更新**: 2026-06-25(P0-1 国家资源重构 — 三件套国家级 + modifier 打通; **202 测试** = 137 内联 + 48 battle + 13 integration + 3 scope + 1 teleport; 见下方"P0-1 国家资源重构"小节)
 
 ---
 
@@ -12,7 +12,7 @@
 - **位置**: `G:\projects\hoi4-clone\`
 - **运行**: `cargo test`(测试) / `cargo run --bin hoi4_demo`(CLI) / 浏览器 `http://127.0.0.1:8765`(UI demo)
 - **工具链**: `stable-x86_64-pc-windows-gnu`(rustup override 绑定)
-- **规模**: ~7800 行 Rust + UI(30+ JS 文件) + 原版数据, **191 Rust 测试 = 126 内联 + 48 battle + 13 integration + 3 scope + 1 teleport; 22 Playwright 验证**
+- **规模**: ~8000 行 Rust + UI(30+ JS 文件) + 原版数据, **202 Rust 测试 = 137 内联 + 48 battle + 13 integration + 3 scope + 1 teleport; 22 Playwright 验证**
 - **分支**: `feat/data-driven-engine`(本轮 25 个提交: 地图视觉 + 游戏逻辑完善)
 - **验证**: `node tests/web_demo.mjs`(Playwright, 用系统 Chrome channel:'chrome', 22 项端到端)
 
@@ -39,6 +39,32 @@
 | **demo 改造后修复+验证** | 见下方"demo 改造后修复"小节(9 项修复 + Playwright 真机验证 13/13) | 122+UI |
 | **地图视觉&战斗可视化改造** | 见下方"地图视觉改造"小节(13 Task + Playwright 17/17) | 122+UI |
 | **游戏逻辑层完善** | 见下方"游戏逻辑完善"小节(占领省份级/国家视角/移动距离+速度/外交/拖拽下令; 126 测试 + 22 验证) | 126+UI |
+| **P0-1 国家资源重构** | 见下方"P0-1 国家资源重构"小节(三件套国家级 + modifier 打通 + create_country; 202 测试) | 202 |
+
+### P0-1 国家资源模型重构(2026-06-25, 对齐 spec 2026-06-25-country-resources-design)
+
+把政治点/稳定度/战争支持度(三件套)从 `World.vars` **全局变量**改成 `Country` **具名字段**, 打通 modifier 接口。为后续国策/科技/政治系统铺地基(P0-1 是它们的前置)。spec → plan → 9 Task TDD 实现。
+
+| 改造 | 内容 | 对齐/来源 |
+|---|---|---|
+| **Country 加资源字段** | `political_power`/`stability`/`war_support` 具名字段(存 base); 手写 Default(stability/war_support=0.5 对齐原版 BASE_*) | 原版 defines NDefines.NCountry |
+| **modifier 接口打通** | `ModifierStat` 加 Stability/WarSupport/PoliticalPower; `parse_modifier_token` 接受 stability(+_factor) 等 token; 复用现有 ModifierStack(零新结构) | 原版: 稳定度走统一 modifier 框架, 非独立加法池(调研推翻"加法池"直觉) |
+| **effective 读取** | `effective_stability()`=clamp(base×mult,0,1) + buffer 保留超额; trigger/UI 读 effective, 命令改 base | 原版 Government wiki |
+| **资源命令国家级** | add/set_stability、add/set_political_power 从全局→当前作用域国家; 无国家时报错(非静默) | 决策5 |
+| **create_country 命令** | 建国家实体+设资源初值(字段可选); 重复 tag 覆盖 | 原版 history/countries 加载语义 |
+| **trigger Compare 作用域化** | `political_power >= 150` 读当前国家 effective; 无国家返回 0(trigger 不报错, 与命令不对称是刻意) | interp.rs |
+| **序列化** | get_state 新增 countries 数组(含 effective 资源字段), 供顶栏 UI(UI 本身后做) | — |
+
+**关键设计决策**(用户确认 + 原版调研):
+- 资源存 Country 具名字段(非 HashMap) — 三件套固定, 与现有具名字段风格一致
+- **复用 ModifierStack**(调研关键发现): 原版稳定度就是普通 modifier 属性走统一框架, `stability`(Add)+`stability_factor`(Multiply), 公式与战斗属性一致; 我一度以为是"独立加法池", 查证后纠正
+- 作用域栈优先回退 player_tag; 无国家时命令报错/trigger返回0(刻意不对称)
+- 不兼容全量迁移测试(不留双写债); 排除 PP默认增长/资源效果/fuel/UI(YAGNI, 留对应系统)
+
+**踩坑/记录**:
+- `ParamGet::get(p, key)` 要全限定调用 — slice 的 inherent `get(usize)` 会遮蔽 trait method(plan 初稿写成 `p.get("tag")` 编译失败, 修正)。
+- `current_country()` 返回 `Option<&str>` 借自 &World, 命令要 `&mut Country` → 用 `current_country_tag()`(owned String)快照后 `get_mut`(避借用冲突)。
+- integration 偶发 flaky(TEST_BLOCKED thread-local 跨测试泄漏, **既有问题非本次引入**); 单线程 `--test-threads=1` 稳定 13/13。
 
 ### 测试基线修复(2026-06-25, 本轮)
 
@@ -354,7 +380,7 @@ docs/
 1. 在 `G:\projects\hoi4-clone\` 开新对话
 2. 读本文件了解全局; 读 `docs/design-principles.md` 了解设计原则(原版是首要参考)
 3. `git checkout feat/data-driven-engine`(若不在)
-4. 跑 `cargo test` 确认基线(**191 测试 = 126 内联 + 65 集成/battle/scope/teleport**)
+4. 跑 `cargo test` 确认基线(**202 测试 = 137 内联 + 65 集成/battle/scope/teleport**; integration 偶发 flaky 用 `--test-threads=1` 稳定)
 5. (可选)跑 `node tests/web_demo.mjs` 确认 UI(需先 `cd web && python -m http.server 8765`)
 6. 看 §4 选下一步(**生产+装备系统**是推荐重点)
 
