@@ -48,8 +48,8 @@
 
 | 改造 | 内容 | 对齐/来源 |
 |---|---|---|
-| **攻方地形惩罚** | `terrain_attacker_penalty(terrain)`: plains/desert1.0 / forest·jungle0.80 / hills0.70 / marsh·urban0.60 / mountain0.40; 攻方 soft/hard_attack 乘此系数 | 原版 terrain.txt(攻方惩罚, 守方不受影响) |
-| **地形宽度** | `terrain_combat_width(terrain)`: plains·hills·desert70 / forest·jungle60 / marsh54 / mountain50 / urban80; `can_join_frontline` 按省份地形查表(原固定70) | 原版 terrain.txt combat_width |
+| **攻方地形惩罚** | `terrain_attacker_penalty(terrain)`(原版 `common/terrain/00_terrain.txt` 的 `units={attack=-X}`, 数值取数据文件非 wiki): plains/desert1.0 / forest0.85(-0.15) / hills0.75(-0.25) / jungle·urban0.70(-0.30) / marsh0.60(-0.40) / mountain0.50(-0.50); 攻方 soft/hard_attack 乘此系数 | 原版 terrain.txt(攻方惩罚, 守方不受影响) |
+| **地形宽度** | `terrain_combat_width(terrain)`(原版 combat_width): plains·hills·desert70 / forest·jungle60 / marsh·mountain50 / urban80; `can_join_frontline` 按省份地形查表(原固定70) | 原版 terrain.txt combat_width |
 | **攻守区分注入** | CombatContext 加 `attacker_terrain_penalty` 字段(build 按省份地形填); 原版**只罚攻方身份**(攻守整场固定): 正向罚攻方 attack + 反击罚攻方 breakthrough(攻方挨反击池被削); 守方 attack/defense 都不罚(享受地形优势) | 原版 Land battle wiki: attacker receives attack and breakthrough penalties |
 
 **关键设计决策**(用户确认):

@@ -190,30 +190,31 @@ impl CombatContext {
 }
 
 /// 地形攻方惩罚系数(0.0-1.0, 越低惩罚越重)。
-/// 原版 terrain.txt: 攻方在恶劣地形 soft/hard_attack 打折, 守方不受影响(享受地形优势)。
-/// plains/desert 1.0(无惩罚) / forest jungle 0.80(-20%) / hills 0.70(-30%) /
-/// marsh urban 0.60(-40%) / mountain 0.40(-60%)。
+/// 原版 common/terrain/00_terrain.txt 的 `units = { attack = -X }`: 攻方 soft/hard_attack 打折。
+/// 守方不受影响(享受地形优势)。数值取自原版数据文件(wiki 的 -20%/-60% 不准):
+///   plains/desert 无 units 块 → 1.0 / forest -0.15 → 0.85 / hills -0.25 → 0.75 /
+///   jungle -0.30 → 0.70 / urban -0.30 → 0.70 / marsh -0.40 → 0.60 / mountain -0.50 → 0.50。
 /// 用于 AtkStats::from 攻方快照(只乘攻方, 不进 CombatContext 通用 stack)。
 pub fn terrain_attacker_penalty(terrain: &str) -> f64 {
     match terrain {
         "plains" | "desert" => 1.0,
-        "forest" | "jungle" => 0.80,
-        "hills" => 0.70,
-        "marsh" | "urban" => 0.60,
-        "mountain" => 0.40,
+        "forest" => 0.85,
+        "hills" => 0.75,
+        "jungle" | "urban" => 0.70,
+        "marsh" => 0.60,
+        "mountain" => 0.50,
         _ => 1.0, // 未知地形回退平原(无惩罚)
     }
 }
 
 /// 地形战斗宽度(每种地形基础宽度不同; 原版 terrain.txt combat_width)。
-/// plains/desert/hills 70 / forest/jungle 60 / marsh 54 / mountain 50 / urban 80。
-/// 多方向加宽(每多一进攻方向 +base/2)本次不做(YAGNI, demo 单方向), 留 TODO。
+/// 数值取自原版数据文件: plains/desert/hills 70 / forest/jungle 60 / marsh/mountain 50 / urban 80。
+/// 多方向加宽(每多一进攻方向 +combat_support_width)本次不做(YAGNI, demo 单方向), 留 TODO。
 pub fn terrain_combat_width(terrain: &str) -> f64 {
     match terrain {
         "plains" | "desert" | "hills" => 70.0,
         "forest" | "jungle" => 60.0,
-        "marsh" => 54.0,
-        "mountain" => 50.0,
+        "marsh" | "mountain" => 50.0,
         "urban" => 80.0,
         _ => 70.0, // 未知地形回退平原
     }
@@ -398,25 +399,27 @@ mod tests {
 
     #[test]
     fn t_terrain_attacker_penalty_values() {
-        // 攻方惩罚系数(对齐原版 terrain.txt): 越恶劣越低
-        assert!((terrain_attacker_penalty("plains") - 1.0).abs() < 1e-9, "平原无惩罚");
+        // 攻方惩罚系数(对齐原版 common/terrain/00_terrain.txt 的 units={attack=-X}):
+        // 越恶劣越低。数值取自原版数据文件(wiki 的 -20%/-60% 不准)
+        assert!((terrain_attacker_penalty("plains") - 1.0).abs() < 1e-9, "平原无 units 块无惩罚");
         assert!((terrain_attacker_penalty("desert") - 1.0).abs() < 1e-9);
-        assert!((terrain_attacker_penalty("forest") - 0.80).abs() < 1e-9, "森林-20%");
-        assert!((terrain_attacker_penalty("jungle") - 0.80).abs() < 1e-9);
-        assert!((terrain_attacker_penalty("hills") - 0.70).abs() < 1e-9, "丘陵-30%");
-        assert!((terrain_attacker_penalty("marsh") - 0.60).abs() < 1e-9, "沼泽-40%");
-        assert!((terrain_attacker_penalty("urban") - 0.60).abs() < 1e-9);
-        assert!((terrain_attacker_penalty("mountain") - 0.40).abs() < 1e-9, "山地-60%最重");
+        assert!((terrain_attacker_penalty("forest") - 0.85).abs() < 1e-9, "森林 attack=-0.15");
+        assert!((terrain_attacker_penalty("hills") - 0.75).abs() < 1e-9, "丘陵 attack=-0.25");
+        assert!((terrain_attacker_penalty("jungle") - 0.70).abs() < 1e-9, "丛林 attack=-0.30");
+        assert!((terrain_attacker_penalty("urban") - 0.70).abs() < 1e-9, "城市 attack=-0.30");
+        assert!((terrain_attacker_penalty("marsh") - 0.60).abs() < 1e-9, "沼泽 attack=-0.40");
+        assert!((terrain_attacker_penalty("mountain") - 0.50).abs() < 1e-9, "山地 attack=-0.50");
         assert!((terrain_attacker_penalty("unknown_xyz") - 1.0).abs() < 1e-9, "未知回退平原");
     }
 
     #[test]
     fn t_terrain_combat_width_values() {
-        // 地形宽度(对齐原版 terrain.txt combat_width)
+        // 地形宽度(对齐原版 common/terrain/00_terrain.txt combat_width)
         assert!((terrain_combat_width("plains") - 70.0).abs() < 1e-9);
+        assert!((terrain_combat_width("hills") - 70.0).abs() < 1e-9);
         assert!((terrain_combat_width("forest") - 60.0).abs() < 1e-9);
         assert!((terrain_combat_width("mountain") - 50.0).abs() < 1e-9);
-        assert!((terrain_combat_width("marsh") - 54.0).abs() < 1e-9);
+        assert!((terrain_combat_width("marsh") - 50.0).abs() < 1e-9, "沼泽50(原版, 非54)");
         assert!((terrain_combat_width("urban") - 80.0).abs() < 1e-9, "城市最宽80");
         assert!((terrain_combat_width("unknown_xyz") - 70.0).abs() < 1e-9, "未知回退平原");
     }
@@ -437,8 +440,8 @@ mod tests {
             reserve_attackers: vec![], reserve_defenders: vec![],
         };
         let ctx = CombatContext::build(&w, &battle);
-        assert!((ctx.attacker_terrain_penalty() - 0.40).abs() < 1e-9,
-            "山地战斗攻方惩罚应 0.40, 实际 {}", ctx.attacker_terrain_penalty());
+        assert!((ctx.attacker_terrain_penalty() - 0.50).abs() < 1e-9,
+            "山地战斗攻方惩罚应 0.50(原版 attack=-0.5), 实际 {}", ctx.attacker_terrain_penalty());
 
         // 平原省(无惩罚)
         w.provinces.insert(2, crate::runtime::Province {
