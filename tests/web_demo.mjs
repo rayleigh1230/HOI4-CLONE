@@ -135,7 +135,34 @@ if (combatInfo?.battles > 0) {
   await page.waitForTimeout(500);
   const combatPanelOpen = await page.locator('#panel-host').evaluate(el => el.classList.contains('open'));
   check('点击战斗图标开战斗面板(landcombatview)', combatPanelOpen, 'panel.open=' + combatPanelOpen);
+  // 战斗面板应有关闭按钮(用户反馈问题4)
+  const hasClose = await page.locator('#panel-host .panel-close').count();
+  check('战斗面板有关闭按钮', hasClose > 0, 'closeBtn=' + hasClose);
+  // ESC 关闭面板
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(300);
+  const escClosed = await page.locator('#panel-host').evaluate(el => !el.classList.contains('open'));
+  check('ESC 关闭面板', escClosed);
 }
+
+// 6b2. 框选(左键拖拽)出部队列表(用户反馈问题2)。框住师1牌子(省1重心上方)
+const boxResult = await page.evaluate(() => {
+  const W=innerWidth,H=innerHeight,m=20,WW=1000,WH=700;
+  const z=Math.min((W-m*2)/WW,(H-m*2)/WH);
+  return { z, camX:W/2-WW/2*z, camY:H/2-WH/2*z };
+});
+// 师1牌子中心 = 世界(100, 195-28) → 屏幕
+const card1x = 100 * boxResult.z + boxResult.camX;
+const card1y = (195 - 28) * boxResult.z + boxResult.camY;
+await page.mouse.move(card1x - 50, card1y - 30);
+await page.mouse.down();
+await page.mouse.move(card1x + 50, card1y + 30, { steps: 8 });
+await page.mouse.up();
+await page.waitForTimeout(500);
+const selOpen = await page.locator('#panel-host').evaluate(el => el.classList.contains('open'));
+const selText = await page.locator('#panel-host').innerText();
+check('左键框选弹出部队列表', selOpen && /师|选中/.test(selText), 'open=' + selOpen + ' text=' + selText.slice(0, 30));
+await page.keyboard.press('Escape');  // 清理
 
 // 6c. 多边形地形渲染: 采样含地形绿色调像素(spec §3.1)
 const terrainCheck = await page.locator('#map').evaluate(c => {
