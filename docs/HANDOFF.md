@@ -1,7 +1,7 @@
 # hoi4-clone 项目交接文档
 
 > **用途**: 在新会话中继续开发。读本文件 + 列出的关键文件即可接上。
-> **更新**: 2026-06-25(游戏逻辑层完善 — 占领省份级/国家视角权限/省间距离+师速度/外交系统/拖拽下令交互; Playwright 22/22; 126 测试)
+> **更新**: 2026-06-25(游戏逻辑层完善 — 占领省份级/国家视角权限/省间距离+师速度/外交系统/拖拽下令交互; **测试基线修复**: 191 测试全绿 = 126 内联 + 48 battle + 13 integration + 3 scope + 1 teleport; 见下方"测试基线修复"小节)
 
 ---
 
@@ -12,7 +12,7 @@
 - **位置**: `G:\projects\hoi4-clone\`
 - **运行**: `cargo test`(测试) / `cargo run --bin hoi4_demo`(CLI) / 浏览器 `http://127.0.0.1:8765`(UI demo)
 - **工具链**: `stable-x86_64-pc-windows-gnu`(rustup override 绑定)
-- **规模**: ~7800 行 Rust + UI(30+ JS 文件) + 原版数据, **126 Rust 测试 + 22 Playwright 验证**
+- **规模**: ~7800 行 Rust + UI(30+ JS 文件) + 原版数据, **191 Rust 测试 = 126 内联 + 48 battle + 13 integration + 3 scope + 1 teleport; 22 Playwright 验证**
 - **分支**: `feat/data-driven-engine`(本轮 25 个提交: 地图视觉 + 游戏逻辑完善)
 - **验证**: `node tests/web_demo.mjs`(Playwright, 用系统 Chrome channel:'chrome', 22 项端到端)
 
@@ -39,6 +39,22 @@
 | **demo 改造后修复+验证** | 见下方"demo 改造后修复"小节(9 项修复 + Playwright 真机验证 13/13) | 122+UI |
 | **地图视觉&战斗可视化改造** | 见下方"地图视觉改造"小节(13 Task + Playwright 17/17) | 122+UI |
 | **游戏逻辑层完善** | 见下方"游戏逻辑完善"小节(占领省份级/国家视角/移动距离+速度/外交/拖拽下令; 126 测试 + 22 验证) | 126+UI |
+
+### 测试基线修复(2026-06-25, 本轮)
+
+接手时发现 `cargo test` 编译即失败(并非 HANDOFF 旧版声称的"126 测试全绿")。根因:前序两轮改造加了字段/改了公式, 但**漏改了 `tests/` 集成测试**, 导致 3 个集成测试目标无法编译, 自那以后一直没跑过。修复后暴露并修好 8 个真实回归。这是"文档与实际脱节"的教训——下次改 struct 字段/核心公式后, 必须跑**全量** `cargo test`(含 `tests/` 集成目标), 不能只看 `src/` 内联测试。
+
+| # | 根因 | 影响范围 | 修复 |
+|---|---|---|---|
+| **A 编译失败** | commit 20cedf4 给 `Province` 加 `controller` 字段, 更新了 `src/` 4 处构造点, 但**漏掉 `tests/battle.rs` `tests/scope.rs` `tests/teleport_bug.rs`** 的 `Province{}` 构造 | 3 个集成测试目标编译失败, 全量 `cargo test` build failure | 3 处补 `..Default::default()` |
+| **B 移动计时回归** | commit c3a3f92 把移动公式从恒定 `MOVE_RATE=0.05`(20h 到达) 改为 `max_speed/(距离km×地形成本)`, 但**没更新 battle.rs 里硬编码的 `advance(小时数)`** | 5 个测试: move_to_empty/march_into/frontline_route/t_multihop/t_queue_move — advance(21/90/100) 在新公式下不够到达 | 把 advance 加大到新公式下足够到达(80/250/800 等), 每处加注释说明公式与距离 |
+| **C 国家视角回归** | commit 0b65327 加了 `player_controls` 校验(player_tag 非空时只能下令自己国家的师), 但**战斗编排测试靠双向下令 GER+FRA 师造场景**, 在 `player_tag="GER"` 下 FRA 命令被静默拒绝 | 3 个测试: stop_keeps_passive_defense/defender_move_to_friendly/defender_move_to_enemy — 下 FRA 命令被拒, 战斗未创建 | 这 3 个测试清空 `player_tag=""`(CLI 模式, 绕过单国家控制; 它们测引擎规则非玩家权限) |
+
+**验证**: `cargo test` 全绿 — 126 内联 + 48 battle + 13 integration + 3 scope + 1 teleport = **191 测试**; `cargo build --target wasm32-unknown-unknown --lib --release` 0 警告。
+
+**遗留观察(非 bug, 记录用)**:
+- 旧建师路径(`create_division` 用 `battalions=`)的 `max_speed` 硬编码 4.0(`commands.rs:259`), **忽略 equipment 参数的速度**——medium_tank 装备并不给 8 的速度。这是设计债(equipment_data.rs 同源), 不在本轮范围。battle.rs 测试据此校准小时数。
+- `tests/integration.rs` 偶发单测失败(TEST_BLOCKED thread-local 跨测试泄漏? 重跑即过)。若再现, 查 pathfinding.rs:80 `set_test_blocked`/`clear_test_blocked` 配对。
 
 ### 游戏逻辑层完善(2026-06-25)
 
@@ -338,7 +354,7 @@ docs/
 1. 在 `G:\projects\hoi4-clone\` 开新对话
 2. 读本文件了解全局; 读 `docs/design-principles.md` 了解设计原则(原版是首要参考)
 3. `git checkout feat/data-driven-engine`(若不在)
-4. 跑 `cargo test` 确认基线(**126 测试**)
+4. 跑 `cargo test` 确认基线(**191 测试 = 126 内联 + 65 集成/battle/scope/teleport**)
 5. (可选)跑 `node tests/web_demo.mjs` 确认 UI(需先 `cd web && python -m http.server 8765`)
 6. 看 §4 选下一步(**生产+装备系统**是推荐重点)
 
