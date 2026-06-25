@@ -148,7 +148,7 @@ pub fn register(reg: &mut Registry) {
             }
         }
         w.provinces.insert(id, crate::runtime::Province {
-            id, state_id, terrain: terrain.into(), neighbors,
+            id, state_id, terrain: terrain.into(), neighbors, ..Default::default()
         });
         // 反向注册: 省 id 加入所属 State 的 provinces 列表
         if let Some(state) = w.states.get_mut(&state_id) {

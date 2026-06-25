@@ -201,26 +201,35 @@ impl World {
         self.provinces.get(&province_id).map(|p| p.state_id)
     }
 
-    /// 省份的实际控制者(从 State 派生; 找不到返回 None → 中立)
+    /// 省份的实际控制者。优先读省份级 controller(占领覆盖); None 则从所属 State 派生。
+    /// 对齐 HOI4 省份级占领: 占领一省只改该省, 不蔓延到同 State 其他省。
     pub fn province_controller(&self, province_id: u32) -> Option<&str> {
-        let sid = self.province_state(province_id)?;
+        let prov = self.provinces.get(&province_id)?;
+        if let Some(c) = prov.controller.as_deref() {
+            return Some(c);
+        }
+        let sid = prov.state_id;
         self.states.get(&sid).map(|s| s.controller.as_str())
     }
 
-    /// 省份的法理归属者(从 State 派生)
+    /// 省份的法理归属者(从 State 派生; 占领不改 owner)
     pub fn province_owner(&self, province_id: u32) -> Option<&str> {
         let sid = self.province_state(province_id)?;
         self.states.get(&sid).map(|s| s.owner.as_str())
     }
 
-    /// 设置省份的实际控制者(改所属 State 的 controller; 省份自动跟随)
-    /// 占领用: 只改 controller, 不改 owner(法理归属不变)
-    pub fn set_state_controller(&mut self, province_id: u32, new_controller: &str) {
-        if let Some(sid) = self.province_state(province_id) {
-            if let Some(state) = self.states.get_mut(&sid) {
-                state.controller = new_controller.into();
-            }
+    /// 设置省份级实际控制者(只改该省, 不碰 State, 不蔓延)。
+    /// 占领用: 对齐 HOI4 省份级占领。
+    pub fn set_province_controller(&mut self, province_id: u32, new_controller: &str) {
+        if let Some(prov) = self.provinces.get_mut(&province_id) {
+            prov.controller = Some(new_controller.into());
         }
+    }
+
+    /// [兼容旧名] 设置省份控制者 — 现改为省份级(原 set_state_controller 是 State 级, 会蔓延)。
+    /// 保留旧名供旧调用点, 但内部委托 set_province_controller 实现省份级占领。
+    pub fn set_state_controller(&mut self, province_id: u32, new_controller: &str) {
+        self.set_province_controller(province_id, new_controller);
     }
 
     // 行军辅助(陆战循环)
@@ -272,6 +281,43 @@ mod tests {
         assert!(w.error_log.is_empty());
         assert_eq!(w.hour, 0);
         assert!(w.player_tag.is_empty());
+    }
+    #[test]
+    fn t_province_level_occupation_no_spread() {
+        // 占领一省不应蔓延到同 State 的其他省(对齐 HOI4 省份级占领)。
+        let mut w = World::new();
+        // state 1 (owner/controller = GER), 含省1 省2
+        w.states.insert(1, crate::runtime::entities::State {
+            id: 1, owner: "GER".into(), controller: "GER".into(),
+            ..Default::default()
+        });
+        w.provinces.insert(1, crate::runtime::entities::Province {
+            id: 1, state_id: 1, ..Default::default()
+        });
+        w.provinces.insert(2, crate::runtime::entities::Province {
+            id: 2, state_id: 1, ..Default::default()
+        });
+        // 占领省2 → FRA
+        w.set_state_controller(2, "FRA");
+        // 省2 应是 FRA
+        assert_eq!(w.province_controller(2), Some("FRA"));
+        // 省1 必须仍是 GER(不蔓延!)
+        assert_eq!(w.province_controller(1), Some("GER"), "占领省2 不应蔓延到省1");
+    }
+    #[test]
+    fn t_province_controller_fallback_to_state() {
+        // Province.controller = None 时, 从所属 State 派生(向后兼容)。
+        let mut w = World::new();
+        w.states.insert(1, crate::runtime::entities::State {
+            id: 1, owner: "GER".into(), controller: "GER".into(),
+            ..Default::default()
+        });
+        w.provinces.insert(1, crate::runtime::entities::Province {
+            id: 1, state_id: 1, ..Default::default()
+        });
+        assert_eq!(w.province_controller(1), Some("GER")); // 派生
+        w.set_province_controller(1, "FRA");
+        assert_eq!(w.province_controller(1), Some("FRA")); // 省份级覆盖
     }
     #[test]
     fn t_m3_scope_stack_starts_root() {

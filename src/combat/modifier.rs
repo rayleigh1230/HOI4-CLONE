@@ -307,7 +307,7 @@ mod tests {
             ..Default::default()
         });
         w.provinces.insert(1, crate::runtime::Province {
-            id: 1, state_id: 1000, terrain: "plains".into(), neighbors: vec![],
+            id: 1, state_id: 1000, terrain: "plains".into(), neighbors: vec![], ..Default::default()
         });
 
         let battle = Battle {

@@ -4,11 +4,14 @@ use std::collections::HashMap;
 #[derive(Debug, Clone, Default)]
 pub struct Province {
     pub id: u32,
-    /// 所属 State id(归属从 State 派生, Province 不再存 owner/controller)
+    /// 所属 State id(法理归属 owner 从 State 派生, Province 不存 owner)
     pub state_id: u32,
     pub terrain: String,
     /// 邻接省份 id 列表(行军/撤退的基础设施)
     pub neighbors: Vec<u32>,
+    /// 省份级实际控制者(占领用)。None=从所属 State 的 controller 派生(默认);
+    /// Some=被单独占领, 省份级覆盖(对齐 HOI4 省份级占领, 不蔓延到同 State 其他省)。
+    pub controller: Option<String>,
 }
 
 /// 州/地区(Province 的上级容器, 归属/建筑/人力的唯一权威源)

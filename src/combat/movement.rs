@@ -370,7 +370,7 @@ mod tests {
             ..Default::default()
         });
         w.provinces.insert(id, crate::runtime::Province {
-            id, state_id: sid, terrain: terrain.into(), neighbors,
+            id, state_id: sid, terrain: terrain.into(), neighbors, ..Default::default()
         });
     }
 
