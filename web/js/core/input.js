@@ -44,8 +44,12 @@ function onMove(e) {
   if (pointers.size === 1 && lastSingle) {
     const dx = e.clientX - lastSingle.x;
     const dy = e.clientY - lastSingle.y;
-    if (Math.hypot(dx, dy) > 3) lastSingle.moved = true;
-    pan(dx, dy);
+    if (Math.hypot(dx, dy) > 5) {
+      lastSingle.moved = true;
+    }
+    if (lastSingle.moved) {
+      pan(dx, dy);
+    }
     lastSingle.x = e.clientX;
     lastSingle.y = e.clientY;
   } else if (pointers.size === 2 && pinchStart) {

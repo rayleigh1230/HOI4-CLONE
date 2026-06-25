@@ -33,7 +33,7 @@ export function render() {
   const tick1Btn = h('button', { class: 'secondary', onclick: () => doTick(1) }, '▶');
   const tick24Btn = h('button', { class: 'secondary', onclick: () => doTick(24) }, '⏩1日');
   const autoBtn = h('button', { class: 'secondary', onclick() {
-    toggleTime(); autoBtn.textContent = toggleTime() ? '⏸' : '▶流逝';
+    let running = toggleTime(); autoBtn.textContent = running ? '⏸' : '▶流逝';
   } }, '▶流逝');
   el.append(tick1Btn, tick24Btn, autoBtn);
 
