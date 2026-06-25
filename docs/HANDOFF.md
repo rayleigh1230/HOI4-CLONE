@@ -1,7 +1,7 @@
 # hoi4-clone 项目交接文档
 
 > **用途**: 在新会话中继续开发。读本文件 + 列出的关键文件即可接上。
-> **更新**: 2026-06-25(P0-2 地形修正接通 — 攻方惩罚 + 地形宽度; **206 测试** = 141 内联 + 48 battle + 13 integration + 3 scope + 1 teleport; 见下方"P0-2 地形修正接通"小节)
+> **更新**: 2026-06-25(P0-2 地形修正接通 — 攻方惩罚 + 地形宽度; **208 测试** = 143 内联 + 48 battle + 13 integration + 3 scope + 1 teleport; 见下方"P0-2 地形修正接通"小节)
 
 ---
 
@@ -12,7 +12,7 @@
 - **位置**: `G:\projects\hoi4-clone\`
 - **运行**: `cargo test`(测试) / `cargo run --bin hoi4_demo`(CLI) / 浏览器 `http://127.0.0.1:8765`(UI demo)
 - **工具链**: `stable-x86_64-pc-windows-gnu`(rustup override 绑定)
-- **规模**: ~8100 行 Rust + UI(30+ JS 文件) + 原版数据, **206 Rust 测试 = 141 内联 + 48 battle + 13 integration + 3 scope + 1 teleport; 22 Playwright 验证**
+- **规模**: ~8100 行 Rust + UI(30+ JS 文件) + 原版数据, **208 Rust 测试 = 143 内联 + 48 battle + 13 integration + 3 scope + 1 teleport; 22 Playwright 验证**
 - **分支**: `feat/data-driven-engine`(本轮 25 个提交: 地图视觉 + 游戏逻辑完善)
 - **验证**: `node tests/web_demo.mjs`(Playwright, 用系统 Chrome channel:'chrome', 22 项端到端)
 
@@ -40,7 +40,7 @@
 | **地图视觉&战斗可视化改造** | 见下方"地图视觉改造"小节(13 Task + Playwright 17/17) | 122+UI |
 | **游戏逻辑层完善** | 见下方"游戏逻辑完善"小节(占领省份级/国家视角/移动距离+速度/外交/拖拽下令; 126 测试 + 22 验证) | 126+UI |
 | **P0-1 国家资源重构** | 见下方"P0-1 国家资源重构"小节(三件套国家级 + modifier 打通 + create_country; 202 测试) | 202 |
-| **P0-2 地形修正接通** | 见下方"P0-2 地形修正接通"小节(攻方地形惩罚 + 地形宽度; 206 测试) | 206 |
+| **P0-2 地形修正接通** | 见下方"P0-2 地形修正接通"小节(攻方地形惩罚 + 地形宽度(含反击修正); 208 测试) | 208 |
 
 ### P0-2 地形修正接通(2026-06-25, 地基层最后一块拼图)
 
@@ -50,7 +50,7 @@
 |---|---|---|
 | **攻方地形惩罚** | `terrain_attacker_penalty(terrain)`: plains/desert1.0 / forest·jungle0.80 / hills0.70 / marsh·urban0.60 / mountain0.40; 攻方 soft/hard_attack 乘此系数 | 原版 terrain.txt(攻方惩罚, 守方不受影响) |
 | **地形宽度** | `terrain_combat_width(terrain)`: plains·hills·desert70 / forest·jungle60 / marsh54 / mountain50 / urban80; `can_join_frontline` 按省份地形查表(原固定70) | 原版 terrain.txt combat_width |
-| **攻守区分注入** | CombatContext 加 `attacker_terrain_penalty` 字段(build 按省份地形填); `AtkStats::from` 攻方额外乘; 守方不乘(享受地形优势); 反击时原守方也受惩罚(谁攻击谁受罚) | 原版: 地形惩罚只作用于发起攻击方 |
+| **攻守区分注入** | CombatContext 加 `attacker_terrain_penalty` 字段(build 按省份地形填); 原版**只罚攻方身份**(攻守整场固定): 正向罚攻方 attack + 反击罚攻方 breakthrough(攻方挨反击池被削); 守方 attack/defense 都不罚(享受地形优势) | 原版 Land battle wiki: attacker receives attack and breakthrough penalties |
 
 **关键设计决策**(用户确认):
 - 范围 = 攻方惩罚 + 地形宽度(维度②③); 排除兵种地形加成(维度④, 需改营数据, 留装备层)
@@ -60,7 +60,7 @@
 
 **踩坑**:
 - `resolve_all_battles` 有两处**内联**调 `AtkStats::from`(正向+反向反击), 绕过 `resolve_hour`; 改签名时两处都要更新(不只 resolve_hour)。
-- 攻方惩罚对**反击也生效**: 反击时原守方发起攻击, 同样受地形惩罚(对齐原版"谁攻击谁受罚"), 不是只罚初始攻方。
+- **地形惩罚攻守归属(2026-06-26 修正)**: 初版凭直觉"谁开火罚谁", 反击也罚守方。查证原版后发现错——原版只罚攻方身份(攻守整场固定, 不随反击翻转), 且罚 attack**和 breakthrough**两个。修正: 守方反击不罚其 attack; 攻方挨反击的 breakthrough 池被罚(更脆)。教训记入 CLAUDE.md 红线1。
 - integration 偶发 flaky(TEST_BLOCKED 泄漏, 既有); 单线程 `--test-threads=1` 稳定 206/206。
 
 ### P0-1 国家资源模型重构(2026-06-25, 对齐 spec 2026-06-25-country-resources-design)
@@ -402,7 +402,7 @@ docs/
 1. 在 `G:\projects\hoi4-clone\` 开新对话
 2. 读本文件了解全局; 读 `docs/design-principles.md` 了解设计原则(原版是首要参考)
 3. `git checkout feat/data-driven-engine`(若不在)
-4. 跑 `cargo test` 确认基线(**206 测试 = 141 内联 + 65 集成/battle/scope/teleport**; integration 偶发 flaky 用 `--test-threads=1` 稳定)
+4. 跑 `cargo test` 确认基线(**208 测试 = 143 内联 + 65 集成/battle/scope/teleport**; integration 偶发 flaky 用 `--test-threads=1` 稳定)
 5. (可选)跑 `node tests/web_demo.mjs` 确认 UI(需先 `cd web && python -m http.server 8765`)
 6. 看 §4 选下一步(**生产+装备系统**是推荐重点)
 
