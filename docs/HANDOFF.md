@@ -1,7 +1,7 @@
 # hoi4-clone 项目交接文档
 
 > **用途**: 在新会话中继续开发。读本文件 + 列出的关键文件即可接上。
-> **更新**: 2026-06-25(State 概念 — 省份上级容器 + 归属从State派生)
+> **更新**: 2026-06-25(基础构造层完成 — 数据驱动+modifier+State+日期+战争, 进入 demo 完善阶段)
 
 ---
 
@@ -12,197 +12,96 @@
 - **位置**: `G:\projects\hoi4-clone\`
 - **运行**: `cargo test`(测试) / `cargo run --bin hoi4_demo`(CLI) / 浏览器 `http://127.0.0.1:8765`(UI demo)
 - **工具链**: `stable-x86_64-pc-windows-gnu`(rustup override 绑定)
-- **规模**: ~7600 行 Rust + UI + 原版数据, **168 测试**
+- **规模**: ~7400 行 Rust + UI + 原版数据, **180 测试**
+- **分支**: `feat/data-driven-engine`(37 个提交, 5 个基础构造里程碑)
 
 ---
 
 ## 1. 已完成的里程碑
 
-| M | 内容 | 测试 | tag |
-|---|---|---|---|
-| M1 | 脚本引擎(parser/AST/interpreter) | 19 | m1-complete |
-| M2 | 运行时重构(Registry/Result/主循环) | 25 | m2-complete |
-| M3 | 实体+作用域+陆战伤害 | 38 | m3-complete |
-| M4a | 装备系统(库存/消耗/增援) | 42 | m4a-complete |
-| 陆战循环 | 四量模型+撤退+歼灭+行军+包围+宽度+预备队+带溃 | 73 | (分支) |
-| 多战场+指令 | 多战场伤害累积+支援攻击+停止+防守撤退+预备队时机 | 99 | (阶段) |
-| 状态机重构 | OrderState enum 替代 7 扁平字段 + 4 条规则对齐 + 瞬移根治 | 101 | (阶段) |
-| 多段路径行军 | 自动寻路 + 航点规划 + 支援攻击邻接收敛 + 路径失效应对 | 118 | (阶段) |
-| 数据驱动引擎 | GameData 只读层 + 模块化装备 + 营→师汇总 + 原版数据加载 | 147 | (阶段) |
-| **modifier 层** | **陆战结算统一修正接口(CombatContext快照 + _factor推导op + 三结算点口子)** | **164** | (阶段) |
-| **State 概念** | **省份上级容器(归属从State派生 + 法理vs控制 + state_loader)** | **168** | **(本阶段)** |
+| M | 内容 | 测试 |
+|---|---|---|
+| M1 | 脚本引擎(parser/AST/interpreter) | 19 |
+| M2 | 运行时重构(Registry/Result/主循环) | 25 |
+| M3 | 实体+作用域+陆战伤害 | 38 |
+| M4a | 装备系统(库存/消耗/增援) | 42 |
+| 陆战循环 | 四量模型+撤退+歼灭+行军+包围+宽度+预备队+带溃 | 73 |
+| 多战场+指令 | 多战场伤害累积+支援攻击+停止+防守撤退+预备队时机 | 99 |
+| 状态机重构 | OrderState enum 替代 7 扁平字段 + 4 条规则对齐 + 瞬移根治 | 101 |
+| 多段路径行军 | 自动寻路 + 航点规划 + 支援攻击邻接收敛 + 路径失效应对 | 118 |
+| **数据驱动引擎** | GameData 只读层 + 模块化装备 + 营→师汇总 + 原版数据加载 | 147 |
+| **modifier 层** | 陆战结算统一修正接口(CombatContext快照 + _factor推导op + 三结算点口子) | 164 |
+| **State 概念** | 省份上级容器(归属从State派生 + 法理vs控制 + state_loader) | 168 |
+| **日期系统** | GameDate 精确公历(闰年/月份天数) + World.date()派生 + clock月切换修正 | 177 |
+| **战争状态** | War关系(are_at_war判定) + 阵营自动拉入 + 敌人判定改造 | 180 |
 
-### 本阶段核心改动: State 概念(2026-06-25)
+### 基础构造层(本阶段, 2026-06-24~25)
 
-**核心**: 引入 State 作为 Province 的上级容器, 成为归属/建筑/人力的唯一权威源。Province 归属彻底从 State 派生(删 owner/controller, 加 state_id)。
+**目标**: 搭建"多系统耦合地基", 免得后续加系统时返工。审计原版 28 个 defines 子系统, 识别出 5 个真地基, 全部完成。
 
-**数据模型**:
-- `State { id, name, owner, controller, manpower, state_category, cores, buildings, provinces }`
-- `Province { id, state_id, terrain, neighbors }` — 删 owner/controller, 加 state_id
-- State 进 World(可变运行时), 不进 GameData(只读)。双重依据: State 可变(被占领) + 剧本切换需改归属
+#### 1. 数据驱动引擎(GameData)
 
-**归属派生**:
-- `world.province_controller(pid)` / `province_owner(pid)` 从 State 派生
-- `world.set_state_controller(pid, tag)` 改所属 State 的 controller(省份自动跟随)
-- 占领只改 controller, 不改 owner(法理归属 vs 实际控制)
+把"硬编码游戏"变成"数据驱动引擎"。师从"硬编码 create_division"变成"由模板+营+装备数据汇总计算"。
 
-**命令**: create_state(建州) + create_province 改造(删 owner, 加 state 引用)
+- **`src/data/`** 层(parser 的第二个消费者, 与 runtime 平行):
+  - `equipment.rs`: ChassisDef/ModuleDef/EquipmentDef + compute_equipment_stats(加法后乘法)
+  - `subunit.rs`: SubUnitDef + combat_stats(营属性=need装备×件数/100)
+  - `template.rs`: DivisionTemplate + to_division_stats(营→师汇总: 求和/加权混合60-40/按width加权)
+  - `loader.rs`: load_all 统一入口 + 两遍扫描解继承 + 装备别名注册
+- **数据来源**: 原版文件编译期嵌入 `src/data_raw/`(include_str!)
+- **统一装备模型**: 所有装备 = 底盘+模块组合。整件装备(步兵)是 slots 为空的底盘
+- **GameData 进 World**(Arc 共享只读, OnceLock 缓存)
+- **create_division 加 template 路径**(数据驱动汇总, 旧 battalions 路径隔离保留)
 
-**Loader**: `src/data/state_loader.rs` 读 history/states/*.txt(裸数字 provinces 列表 + history 子块)
+#### 2. modifier 层(陆战结算统一修正接口)
 
-**parser 改进**: 支持 Num 作 key(原版 buildings 块 3838={naval_base=0} 省份 id 作 key)
+后续所有系统(科技/国策/将领/堑壕/地形/昼夜)通过往 ModifierStack 塞数据影响结算, 不再各自改结算代码。
 
-**测试迁移**: 全量迁移 scope/teleport/battle/integration/diag 的建省脚本(create_state + add_test_province helper); controller 读改 province_controller 派生
+- **`src/combat/modifier.rs`**: Modifier/ModifierStack/CombatContext
+- **op 由属性名后缀推导**(对齐原版 Paradox 约定): `_factor`=Multiply, 无后缀=Add
+- **叠加公式**: `(1+ΣAdd) × Π(1+Multiply)`
+- **CombatContext**: 结算前快照, 汇总 国家+省份+师 三层 modifier(避借用冲突; 支持昼夜等动态 modifier)
+- **三结算点口子**: effective_*(mods) / can_join_frontline(mods) / recovery(mods)
+- **空栈默认返回 1.0**(现有测试零破坏)
 
-**借用技巧**: recovery 遍历 divisions.values_mut 时查 controller, 必须内联字段访问(provinces/states 分离借用), 不能用接 &self 的 province_controller 方法
+#### 3. State 概念(省份上级容器)
 
-**核心承诺兑现**: 后续加科技/国策/将领/堑壕/地形/昼夜系统时, **不改 resolve.rs / effective_* / width.rs / recovery.rs**——只往 ModifierStack push 数据。
+- `State { id, owner, controller, manpower, category, cores, buildings, provinces }`
+- `Province` 删 owner/controller, 加 state_id; 归属从 State 派生
+- **占领只改 controller, 不改 owner**(法理归属 vs 实际控制)
+- **State 进 World**(可变运行时, 不进 GameData。依据: State 可变 + 剧本切换需改归属)
+- `src/data/state_loader.rs`: 读 history/states/*.txt
 
-**新增 `src/combat/modifier.rs`**:
-- `Modifier`/`ModifierStat`/`ModifierOp`/`ModifierStack`(数据模型)
-- `parse_modifier_token`: 属性名后缀推导 op(对齐原版 — `_factor`=Multiply, 无后缀=Add)
-- `CombatContext`: 结算前快照, 汇总 国家+省份+师 三层 modifier(避借用冲突)
-- `terrain_modifiers`: 占位(返回空栈, 后续地形系统填)
+#### 4. 日期系统(精确公历)
 
-**叠加公式**: `(1+ΣAdd) × Π(1+Multiply)`
-- Add 类(科技/精神/将领, 无后缀属性): 同类相加
-- Multiply 类(地形/战术/堑壕/计划, `_factor` 后缀): 异层相乘
-- 负向修正几乎全是 Multiply → 逐个相乘永不负(避溢出)
+- `src/runtime/date.rs`: GameDate + from_hours/to_hours(Howard Hinnant 绝对天数算法)/day_of_year
+- `World.date()` 从 hour 派生(保留 hour 不动, 现有测试零破坏)
+- clock 月切换改月份比对(不再 % 30, 月份天数不固定)
+- 闰年正确(1936.2.29 存在)
 
-**三个结算口子**:
-- 战斗属性: `effective_*(mods)` × modifier(soft/hard/defense/breakthrough/armor/piercing)
-- 战斗宽度: `can_join_frontline(..., mods)` 上限 = 70 × CombatWidth multiplier
-- org 恢复: `recovery × OrgRegain multiplier`
+#### 5. 战争状态(War 关系)
 
-**实体接入**: Division/Country 各加 `modifiers: ModifierStack` 字段; resolve_all_battles 构造 CombatContext 传给结算。
+- `War { attackers, defenders }`(攻守两侧 tag 集合)
+- `are_at_war(a, b)` / `enemies_of(tag)` / `declare_war(attacker, defender)`
+- `Country.faction` 阵营字段; 宣战时同阵营成员自动加入
+- 5 处 `owner_tag != owner`(全员敌对) → `are_at_war`(战争关系判定)
+- `start_battle` 自动宣战(现有测试零改动兼容)
+- 命令: declare_war/white_peace/create_faction/join_faction
 
-**命令接口**: `add_country_modifier`/`add_division_modifier`(stat 用原版属性名, op 自动推导)
+#### 实施中解决的真实数据加载问题
 
-**快照支持动态 modifier**: CombatContext 结算前冻结当前小时的 darkness 等, 昼夜/天气后续接入只往省份层 push, 不改结算(spec §3.4)。
+| 问题 | 根因 | 修正 |
+|---|---|---|
+| lexer BOM | 原版文件 Windows BOM | lex 跳过 \u{feff} |
+| 非法数字 | 日期 1939.1.1 多段点号 | parse 失败回退为字符串 token |
+| 命名空间限定 | `mio:GER_xxx` 冒号 | ident 字符集含 `:` |
+| 裸 ident 列表 | `type={infantry}` | parser lookahead: ident 后非=则列表 |
+| archetype 别名 | 营 need 引用 archetype 名, 装备按型号存 | loader 注册最新型号别名 |
+| 数字 key | buildings 块 `3838={naval_base=0}` | parse_block 支持 Num 作 key |
 
-**零破坏保证**: 空 ModifierStack multiplier=1.0, effective_* 数值与改造前逐位相同, 现有测试零回归。
+#### 设计原则沉淀
 
-**设计原则沉淀**: `docs/design-principles.md`(原版设计是首要参考对象 + modifier双模式教训)。
-
-### 本阶段核心改动: 数据驱动引擎架构(2026-06-24)
-
-**核心转变**: 师从"硬编码 create_division"变成"由模板+营+装备数据汇总计算"。引入只读静态定义数据库 `GameData`, 让引擎读原版数据文件。
-
-**新增 `src/data/` 层**(parser 的第二个消费者, 与 runtime 平行):
-- `mod.rs` — GameData 结构 + EquipStats(add/multiply 汇总公式) + OnceLock 进程级缓存
-- `equipment.rs` — ChassisDef/ModuleDef/EquipmentDef/SlotDef + compute_equipment_stats(加法后乘法)
-- `subunit.rs` — SubUnitDef + combat_stats(营属性=need装备×件数/100) + battalion_mult
-- `template.rs` — DivisionTemplate + to_division_stats(营→师汇总: 求和/加权混合60-40/按width加权)
-- `loader.rs` — load_all 统一入口 + 两遍扫描解继承 + 装备别名注册
-
-**统一装备模型**: 所有装备 = 底盘 + 模块组合。整件装备(步兵)是 slots 为空的底盘; 模块化装备(坦克)有槽位。历史预置型号和玩家自建设计走同一汇总公式。
-
-**数据来源**: 原版文件编译期嵌入 `src/data_raw/`(include_str!), 拷贝精简子集(步兵/炮/坦克装备+模块+营+德国OOB模板)。
-
-**改造点**:
-- World 加 `data: Arc<GameData>`(new() 经 cached_game_data() 自动加载, 现有测试零改动)
-- create_division 加 `template` 参数(数据驱动汇总); 旧 `battalions`/手填路径隔离保留
-
-**附带 parser 改进**(修真实数据加载的语法差异):
-- lexer 跳过 UTF-8 BOM
-- 非法数字(日期 1939.1.1)回退为字符串 token
-- ident 字符集含 `:`(命名空间限定 mio:GER_xxx)
-- parser lookahead: 块内 Ident 后非=/比较符 → 裸 ident 列表(type={infantry})
-
-**营→师汇总公式**(对齐 docs/formulas/land-combat.md 第2节):
-- 求和类(攻防突宽HP人力): Σ
-- 加权混合60-40(装甲/穿甲)
-- 按 combat_width 加权(硬度/org)
-
-**验证**: 7步师 soft=21 defense=140 hp=175(与原版注释一致); 装甲加权混合(1步+1甲50→35); 真实德国OOB模板建师属性非零。
-
-### 本阶段核心改动: 多段路径行军(2026-06-23)
-
-**新增能力**: 师可沿多省路线逐段推进(点远处省自动 BFS 寻路), 支持追加航点。
-
-**数据结构**: `OrderState::Moving` 加 `remaining: Vec<u32>`(dest 走完之后还要去的省, 不含 dest); `OrderState::Pending` 也加 `remaining`(战斗胜后续走)。单段移动 = remaining 空, 行为不变。
-
-**新模块 `src/combat/pathfinding.rs`**: BFS 寻路 + 双插槽
-- `is_passable`(现在恒 true): 未来加"未开战不得入境""绕开驻军省"只改此函数
-- `edge_weight`(预留, 现权重全1=BFS): 未来加省份距离数据 → 自动升级为 Dijkstra(距离之和最短)
-
-**新增命令**:
-- `move_division`(改造): 下单时 BFS 寻路填 remaining; 战败/停止路径自动取消(Moving 变 Idle/Retreating)
-- `queue_move`(新): 追加航点到路径末尾(手机端友好, 无需 shift); Idle 时等同 move_division
-- `support_attack`(收敛, 决策13): 目标省须与师 location 相邻, 否则静默无效
-
-**行军推进**(`advance_movement`):
-- 到达中途省(占领)→ 检查 remaining 续走下一段(dest=下站, progress=0)
-- Pending 战斗胜利占领 → 也续走
-- 决策14 路径失效应对: dest 不可进入(`is_passable` 返回 false)→ 师停止(转 Idle); 强制中止函数 `invalidate_paths_to_inaccessible`(供未来投降/停战事件批量调用)
-
-**WASM**: 新增 `engine_queue_move` FFI; 序列化新增 `path` 数组字段(Moving/Pending 暴露完整路径 [orig,dest,...remaining] 给 JS 画全程箭头)。
-
-**UI 路径可视化**(web/index.html):
-- 一条完整折线箭头,头固定在最终目的地,尾随 progress 缩短
-- 重合边(往返)用平行车道偏移(line offset)区分去回
-- 下令菜单加「➕ 追加航点」按钮(接 engine_queue_move)
-- Canvas 布局改两排对垒 + 加粗军事箭头
-
-**地图**: 10 省两军对垒(上排 1-5 GER / 下排 6-10 FRA),横向+纵向+斜向完整邻接网格,支持多路夹击与斜线穿插。
-
-**设计文档**: `docs/superpowers/specs/2026-06-23-multi-hop-marching-design.md`(14 条决策)
-**实现计划**: `docs/superpowers/plans/2026-06-23-multi-hop-marching.md`(11 Task)
-
-### 本阶段核心改动: OrderState 状态机(2026-06-22)
-
-**重构前**: Division 有 7 个扁平行动字段(retreating/destination/move_progress/attacking/origin_province/pending_arrival/supporting),状态转换规则散落在 3 个文件,反复 fix(land) 20+ 次。
-
-**重构后**: 单一 `order: OrderState` 字段,5 个变体:
-```rust
-enum OrderState {
-    Idle,
-    Moving { dest, progress, hostile, origin },  // 主动行军(绿/红)
-    Retreating { dest, progress },                // 撤退(独立判定, 对其他系统不可见)
-    Pending { dest },                             // 到达但战斗未胜, 等占领
-    Supporting { target },                        // 支援攻击(不移动)
-}
-```
-
-**4 条状态机规则(宪法, 详见 `docs/specs/2026-06-22-order-state-semantics.md`)**:
-1. **进军/移动同一指令两种状态**: dest 归属地己方+无敌军→移动; 非己方或有敌军→进军
-2. **每小时索敌**(check_engagements): 移动遇敌→开战; 归属地被攻→自动当守方
-3. **归属地变更需**: 进度满 100% **且** 自身未处于任何战场(进度满时检查师自身在不在 battle 列表)
-4. **撤退仅邻省**: Retreating 状态独立判定, 只去邻近省份
-
-**战败区分(关键)**:
-- 攻方战败 + 归属地仍己方 → **瞬间回归属地**(转 Idle, 不是 Retreating)
-- 攻方战败 + 归属地已丢 → 进 Retreating 撤向邻省
-- 守方战败 → 进 Retreating 撤向邻省
-
-**撤退到达独立判定**(Retreating 组, 不套用 Moving 逻辑):
-- 邻省己方/敌方无敌军 → Capture(归属+Idle; 敌方空省占领)
-- 邻省敌方有敌军 → RetreatIntoEnemy(强制归属+进入战场)
-
-**瞬移 bug 根治**: 之前用"撤退瞬间改 location"hack 修瞬移,有副作用。新语义下 **Pending 不改 location**(师始终显示在归属地),战败"回归属地"=原地转 Idle,自然无瞬移。
-
-### 陆战已实现的核心机制(完整)
-
-**四量模型与伤害**
-- 四量模型: 组织度(Org) / HP / 装备 / 人力 独立
-- 伤害: 骰子(d4/d2) + 防御池(10%/40%命中) + 装甲碾压 + 穿甲系数
-- **多战场伤害累积**(P1-6): 同一师参与多场战斗, 伤害 delta 累加(非覆盖)
-
-**战斗生命周期**
-- 撤退(org归零+HP有余) / 歼灭(HP归零) / 包围歼灭(无邻省)
-- 带溃(前线崩→预备队强制撤退)
-- **Retreating 对其他系统不可见**: check_engagements 完全忽略(不当攻方也不当守方)
-
-**战斗指令(4种, 已完整)**
-- **移动/进军**(move_division): 点选移动, 目标有敌军→进攻(红箭头), 无敌军→普通移动(绿)
-- **支援攻击**(support_attack): 师不移动, 作为攻方远程参战(蓝箭头); 下单时目标省须已有战斗
-- **停止**(stop_order): 取消主动行动(进军/移动/支援), 保留被动防守和撤退
-- **防守主动撤退**(move_division 到相邻己方省): 战斗地块下移动到己方省→撤退状态
-
-**战斗宽度与预备队**
-- 战斗宽度(70) + 预备队 + 补位(2%/h)
-- **预备队判定时机**(started 标志): 部署阶段(started=false)同方向都进前线; 游戏开始后同 origin 后到的进预备队
-- 同出发地判定(Moving.origin), 宽度限制始终生效
+`docs/design-principles.md` — **原版设计是首要参考对象**。每次做新系统先查原版数据文件/defines/wiki, 不凭直觉设计。教训: modifier 的 op 最初设计了"双模式"(脚本显式标记 + loader 猜文件类型), 查证后发现原版用属性名后缀(`_factor`)自动推导, 根本不需要标记。
 
 ---
 
@@ -210,168 +109,122 @@ enum OrderState {
 
 ```
 src/
-├── parser/       lexer(含BOM跳过/日期容错/冒号ident/裸ident列表lookahead)
-│                 + block(脚本→Block树) + List(裸值列表)
-├── ast/          effect/trigger/lower(Block→Effect/Trigger)
-├── data/         ★数据驱动层(parser的第二个消费者, 与runtime平行)
-│   ├── mod.rs        GameData(只读数据库) + EquipStats(add/multiply) + OnceLock缓存
-│   ├── equipment.rs  ChassisDef/ModuleDef/EquipmentDef/SlotDef + compute_equipment_stats
-│   ├── subunit.rs    SubUnitDef + combat_stats(营=need装备×件数/100) + battalion_mult
-│   ├── template.rs   DivisionTemplate + to_division_stats(营→师汇总公式)
-│   └── loader.rs     load_all统一入口 + 两遍扫描解继承 + 装备别名注册
-├── data_raw/     ★原版数据文件拷贝(编译期include_str!嵌入)
+├── parser/          lexer(含BOM跳过/日期容错/冒号ident/裸ident列表/Num作key) + block
+├── ast/             effect/trigger/lower(Block→Effect/Trigger)
+├── data/            ★数据驱动层(parser的第二个消费者, 与runtime平行)
+│   ├── mod.rs          GameData(只读数据库) + EquipStats(add/multiply) + OnceLock缓存
+│   ├── equipment.rs    ChassisDef/ModuleDef/EquipmentDef/SlotDef + compute_equipment_stats
+│   ├── subunit.rs      SubUnitDef + combat_stats(营=need装备×件数/100) + battalion_mult
+│   ├── template.rs     DivisionTemplate + to_division_stats(营→师汇总公式)
+│   ├── loader.rs       load_all统一入口 + 两遍扫描解继承 + 装备别名注册
+│   └── state_loader.rs load_states读history/states/*.txt
+├── data_raw/        ★原版数据文件拷贝(编译期include_str!嵌入)
 ├── runtime/
-│   ├── entities.rs   Province/Country/Division/Battle/Scope + OrderState enum
-│   │                 Division.order: OrderState(替代旧 7 扁平字段)
-│   │                 派生方法: is_moving/is_withdrawing/is_pending/is_idle/
-│   │                 move_dest/retreat_dest/pending_dest/move_origin/move_progress
-│   ├── world.rs      World状态 + data:Arc<GameData> + scope_stack + 实体管理 + started标志
+│   ├── entities.rs   Province(state_id) / State / Country(faction) / War / Division / Battle / Scope
+│   ├── world.rs      World状态 + wars/are_at_war/declare_war + states派生查询 + date()派生
+│   ├── date.rs       ★GameDate 精确公历(闰年/monthDay) + from_hours/to_hours
+│   ├── clock.rs      GameClock::tick(主循环, 月切换用月份比对)
 │   ├── interp.rs     Interpreter(run/eval + run_for_each作用域枚举)
 │   ├── registry.rs   Registry(effects/triggers) + ParamGet
-│   ├── clock.rs      GameClock::tick(主循环)
 │   └── error.rs      CmdError
 ├── combat/
 │   ├── modifier.rs   ★陆战结算统一修正接口(Modifier/ModifierStack/CombatContext + _factor推导op)
-│   ├── resolve.rs    陆战结算(骰子/防御池/装甲) + cleanup(撤退/歼灭/带溃/占地)
-│   │                 注入 CombatContext; atk_stats/pool_value 接 mods
-│   ├── movement.rs   check_engagements(过滤 Retreating) + cancel_finished_supports
-│   │                 + advance_movement(进度推进+到达判定, 规则3: 自身在战场不结算归属)
-│   │                 到达分支: Moving→Capture/Pending; Retreating→Capture/RetreatIntoEnemy
-│   ├── width.rs      战斗宽度 + reinforce_reserves(预备队补位2%/h)
-│   ├── recovery.rs   组织度恢复(读 OrderState, Moving敌方掉/Retreating恢复/Idle恢复)
+│   ├── resolve.rs    陆战结算(注入CombatContext; atk_stats/pool_value接mods)
+│   ├── movement.rs   check_engagements(are_at_war判定) + advance_movement(set_state_controller占领)
+│   ├── width.rs      战斗宽度(乘CombatWidth modifier) + reinforce_reserves
+│   ├── recovery.rs   组织度恢复(内联字段访问避借用冲突; 乘OrgRegain modifier)
 │   ├── reinforce.rs  装备+人力增援(每日, 排除 Moving/Retreating)
-│   ├── commands.rs   create_division(template/battalions/手填三路径)/start_battle/
-│   │                 move_division/support_attack/stop_order + join_as_attacker
-│   └── equipment_data.rs  5种1936装备硬编码表(旧路径用, 数据驱动路径不碰)
-├── commands/     vars/control/scope命令注册
-├── wasm_api.rs   WASM桥接(序列化时 OrderState 拍平为原 6 JSON 键, JS 零改动)
+│   ├── commands.rs   create_state/province/division(template/battalions/手填) + 战争命令 +
+│   │                 move_division/support_attack/stop_order + start_battle(自动宣战)
+│   ├── pathfinding.rs BFS寻路 + is_passable插槽
+│   └── equipment_data.rs 5种1936装备硬编码表(旧路径用)
+├── commands/         vars/control/scope命令注册
+├── wasm_api.rs       WASM桥接(序列化省份controller/owner从State派生读)
 └── lib.rs / main.rs
 web/
-└── index.html    UI(部署面板+Canvas节点图+交战视窗+弹菜单+状态条+进度箭头)
+└── index.html        UI(部署面板+Canvas节点图+交战视窗+弹菜单+状态条+进度箭头)
+docs/
+├── design-principles.md  ★复刻设计原则(原版是首要参考)
+├── formulas/land-combat.md  陆战公式(四量模型/防御池/装甲/宽度)
+└── superpowers/      specs(6篇设计文档) + plans(7篇实现计划)
 ```
 
 ### 主循环顺序(clock.rs 每小时)
 ```
-1. hour += 1; started = true(首次tick)
+1. prev_month = date().month; hour += 1; started = true
 2. fire_event(on_hourly)
-3. check_engagements        — Moving/Pending师遇敌→开战(过滤Retreating)
+3. check_engagements        — Moving/Pending师遇敌→开战(are_at_war判定, 过滤Retreating)
 4. cancel_finished_supports — 支援目标省战斗结束→清Supporting
-5. resolve_all_battles      — 战斗结算(伤害累积+撤退+歼灭+带溃+占地)
+5. resolve_all_battles      — 战斗结算(CombatContext注入; 伤害累积+撤退+歼灭+带溃+占地)
 6. reinforce_reserves       — 预备队补位(2%/h)
-7. advance_movement         — 进度推进 + 到达判定(规则3: 自身在战场不结算)
-8. recover_org              — org恢复/损耗(读OrderState)
+7. advance_movement         — 进度推进 + 到达判定(set_state_controller占领)
+8. recover_org              — org恢复/损耗(读OrderState + OrgRegain modifier)
+9. hour%24==0 → on_daily + reinforce_all(每日增援)
+10. hour%(24*7)==0 → on_weekly
+11. date().month != prev_month → on_monthly(精确月份边界)
 ```
 
 ---
 
-## 3. 战斗指令完整参考
+## 3. 基础构造层的接口总结(后续系统怎么接入)
 
-### 3.1 四种指令
+| 后续系统 | 接入方式(不改基础构造层) |
+|---|---|
+| **国策** | 完成奖励 → add_country_modifier; trigger 读 are_at_war / date(); 花费 date() 算天数 |
+| **科技** | 完成 → add_country_modifier(stat=soft_attack value=0.05); 解锁装备(GameData) |
+| **将领** | add_division_modifier; 技能影响 modifier |
+| **堑壕** | 战斗每小时 dig_in++, 转 add_division_modifier(stat=defense_factor) |
+| **地形** | terrain_modifiers 函数填真实值(替换占位空栈) |
+| **昼夜** | State纬度 + World.date().day_of_year() → darkness; CombatContext省份层加 night_modifier |
+| **补给** | 读 State.buildings(infrastructure); supply flow 沿 State 计算 |
+| **生产** | 读 State.buildings(industrial_complex/arms_factory); State.manpower(征兵) |
+| **剧本切换** | World初始化后运行 transfer_state 命令改 owner/controller |
+| **宣战/阵营** | declare_war / create_faction / join_faction |
+| **移动速度口子** | (modifier层未覆盖, 需要时加 MovementSpeed + movement.rs 口子) |
 
-| 指令 | 命令 | 语义 | 触发条件 |
-|---|---|---|---|
-| 移动/进军 | `move_division = { division target }` | 师移动到目标省 | dest有敌军→进攻(红); 无敌军→普通移动(绿) |
-| 支援攻击 | `support_attack = { division target }` | 师不移动, 远程参战(蓝) | **下单时目标省须已有战斗**, 否则无效 |
-| 停止 | `stop_order = { division }` | 取消主动行动 | Moving/Supporting 可停; Retreating/Pending 不可 |
-| 防守撤退 | `move_division`(到相邻己方省) | 战斗地块下移动→撤退 | 师在战斗地块 + 目标相邻己方省(规则4) |
-
-### 3.2 关键判定逻辑
-
-**move_division 的分支**(commands.rs, 按顺序):
-1. 师在战斗地块 + 目标**相邻**己方省 → **防守撤退**(转 Retreating, 退出战斗)
-2. 否则 → **Moving**(dest=target, origin=cur_loc, hostile=目标非己方)
-
-**stop_order 语义**(取消主动, 保留被动):
-- Retreating/Pending → 忽略(不可停)
-- Moving/Supporting → 转 Idle + 从 attackers/reserve_attackers 移除
-- **不动** defenders/reserve_defenders(被动防守继续)
-
-**support_attack**:
-- 下单时无战斗 → 静默无效(蓝箭头不出现)
-- 有战斗 → 转 Supporting, 加入攻方(复用 join_as_attacker), 不移动
-- 战斗消失 → cancel_finished_supports 自动转 Idle
-- 战败 → 按攻方战败规则(归属地己方→Idle)
-- 不占地(location≠目标省)
-
-### 3.3 预备队判定(join_as_attacker)
-- **部署阶段**(started=false): 同方向(同 origin)都进前线
-- **游戏开始后**(started=true): 同 origin 后到的进预备队
-- **宽度限制**: 始终生效(超宽进预备队, 与 started 无关)
-- origin 取值: Moving 用其 origin 字段; 其它(支援/守方转攻)用 location_province
+**核心**: 后续系统只"往接口塞数据", 不改 resolve.rs / effective_* / width.rs / recovery.rs / State结构 / War结构。
 
 ---
 
-## 4. 状态机语义(宪法)
+## 4. 下阶段方向: 完善 demo 做实际测试
 
-详见 `docs/specs/2026-06-22-order-state-semantics.md`
+**目标**: 把基础构造层接入 UI demo, 做端到端实际测试, 暴露架构问题。
 
-**Moving 组(进军/移动)**:
-- 进度满 + dest己方/无敌军 → Capture(归属+Idle; 敌方空省占领+org掉血)
-- 进度满 + dest有战斗/敌军 → Pending(**不改 location**, 规则3)
-- 进度满 + **师自身在战场**(in_battle) → 不结算(保持Moving, 等战斗结束)
-- 途中每小时索敌: dest出现敌军→开战; 归属地被攻→自动当守方
+### 当前 demo 状态
 
-**Pending 处理**:
-- 战斗胜+无敌人 → location=dest(占领), Idle
-- 战斗败 → 转入战败处理
+- **web/index.html**: 单文件 UI(Canvas节点图 + 交战面板 + 弹菜单 + 进度箭头)
+- **10省对垒地图**: 上排 GER / 下排 FRA
+- **已有**: 师部署 + 移动/进军/支援攻击/停止命令 + 战斗可视化
+- **缺口**: demo 还用旧脚本(create_division battalions, 未接 create_state/template/declare_war); 数据驱动/State/战争的新能力未在 UI 体现
 
-**Retreating 组(撤退, 独立判定)**:
-- 进入途径: 守方战败 / 攻方战败(归属地丢) / 玩家主动下令
-- 只去邻省(规则4)
-- 到达邻省: 己方/敌方无敌军→Capture; 敌方有敌军→RetreatIntoEnemy(强制归属+开战)
-- RetreatIntoEnemy 战胜→占领; 战败→找周围己方撤退; 无→歼灭
+### 下阶段优先级建议
 
-**战败统一规则**:
-- 攻方战败 + 归属地己方 → 瞬间回归属地(Idle)
-- 攻方战败 + 归属地丢 → Retreating 撤邻省
-- 守方战败 → Retreating 撤邻省
-- 无邻省 → 歼灭(包围)
+1. **demo 接入新基础构造**: create_state + create_province(state引用) + declare_war + create_division(template); 让 demo 用真实数据驱动的师 + 真实战争关系
+2. **实际测试暴露问题**: 跑几局完整对战, 看架构在真实场景有什么 bug(借用冲突/数值偏差/状态机边界)
+3. **根据测试结果修 bug**: 基础构造层的问题优先修(它们影响所有后续系统)
+4. **补数据文件**: 当前只拷了部分原版数据(营/装备/State 子集), 补全让德国模板完整
 
----
+### 未实现系统(按优先级, 供后续选择)
 
-## 5. 未实现的交战规则(后续按优先级)
-
-| 规则 | defines值 | 优先级 |
+| 系统 | 依赖的地基(都已就位) | 复杂度 |
 |---|---|---|
-| 堆叠惩罚 | COMBAT_STACKING_START=5, -2%/师 | 中 |
-| 超宽惩罚 | OVER_WIDTH -1%/%, max -33% | 中 |
-| 堑壕 | DIG_IN_FACTOR=0.02, CAP=5 | 中 |
-| 多方向被攻 | MULTIPLE_COMBATS_PENALTY=-0.5 | 中 |
-| 将领技能 | 攻/防/计划 | 低(无将领系统) |
-| 渡河/要塞 | RIVER -30/-60%, FORT -15% | 低(无地形系统) |
-| CAS空中支援 | AIR_SUPPORT_BASE=0.25 | 低(无空军) |
-| 战术系统 | TACTIC_SWAP=12h | 低 |
-| 计划加成 | PLANNING_MAX=0.3 | 低 |
-
-### 多段路径行军(寻路)设计要点(已实现 2026-06-23)
-详见 `docs/superpowers/specs/2026-06-23-multi-hop-marching-design.md`(14 条决策)。
-- Moving/Pending 加 `remaining: Vec<u32>`(dest 走完之后还要去的省)
-- 用户点远处省 → BFS 寻路 → 逐段推进, 到达中途省占领后续走
-- 途中遇敌开战, 胜后继续剩余路径(Pending 加 remaining)
-- 航点规划: `queue_move` 追加航点(手机端友好, 无需 shift)
-- 路径失效应对: dest 不可进入则停止 + `invalidate_paths_to_inaccessible` 强制中止函数
-- 前端只画当前段(零改动)
+| 国策系统 | modifier + date + war(trigger) | 中 |
+| 科技系统 | modifier + GameData(解锁装备) | 中 |
+| 生产系统 | State(buildings/manpower) | 中高 |
+| 补给系统 | State(buildings) + date | 高(HOI4最复杂) |
+| 外交系统 | war + faction | 中 |
+| 建筑系统 | State(buildings升级) | 中 |
+| 投降/和平会议 | war + State(victory_points待加) | 高 |
 
 ---
 
-## 6. 后续系统(待做)
-
-- **【下一阶段】战斗气泡指示**: 在交战省份上显示战斗状态气泡(如交战标记、双方兵力对比、胜负趋势),让玩家一眼看出哪里在打仗、战况如何。现在战斗信息只在右侧"交战面板"文字显示,地图本身无战斗标识。
-- **生产系统**: 工厂→IC→生产线→产装备(现在装备靠"补给"按钮凭空给)
-- **AI对手**: FRA自动部署/防守/反击
-- **国策系统**: 加载核心国策, 点国策触发效果
-- **扩展地图**: 已从3省扩展到10省(两军对垒);后续可继续扩到几十省
-- **海军/空军**: 简化为制海权/制空权数值
-
----
-
-## 7. 新会话怎么接上
+## 5. 新会话怎么接上
 
 1. 在 `G:\projects\hoi4-clone\` 开新对话
-2. 读本文件 + `docs/specs/2026-06-22-order-state-semantics.md`(状态机宪法)
-3. 看 `git log --oneline` 了解最近改动
-4. 跑 `cargo test` 确认基线(**101测试**)
-5. 从 §5/§6 选下一步做
+2. 读本文件了解全局; 读 `docs/design-principles.md` 了解设计原则
+3. `git checkout feat/data-driven-engine`(若不在)
+4. 跑 `cargo test` 确认基线(**180测试**)
+5. 看 §4 选下一步(demo 完善 / 新系统)
 
 ### 运行UI demo
 ```bash
@@ -392,51 +245,7 @@ cp target/wasm32-unknown-unknown/release/hoi4_clone.wasm web/
 - WASM FFI: u64参数在JS侧要BigInt, 用u32避免
 - WASM更新后: fetch加 `?v=Date.now()` 防缓存
 - engine_tick: 必须用 GameClock::advance(完整主循环), 不能内联
-- HashMap多可变借用: 用快照→计算→写回模式(advance_movement 的到达判定尤其注意)
-- **撤退师过滤**: check_engagements/move_division 查敌军时都要 `!od.retreating`, 否则撤退师被重拉入战斗
-- **借用冲突**: get_mut 持有借用时不能再 world.divisions.values(), 用局部作用域释放
-
----
-
-## 8. 本阶段(2026-06-21~22)完成的提交
-
-| 提交 | 内容 |
-|---|---|
-| 9d4d8a0 | P1-6 多战场伤害累积(非覆盖) + P2 归属地防守回归测试 |
-| 229a8e9 | P3 进攻失败瞬间回 origin_province |
-| 26f0d2a | P4 UI部队位置=归属地 + pending_arrival虚线箭头 |
-| 6586c01 | UI 自动战斗→时间流逝开关(修无战斗不流逝) |
-| f61b9db | UI 行军进度填充箭头 + 撤退灰色 + 交战面板4状态条 |
-| 03122da | fix 撤退师不被重新拉入战斗(org归零后不再掉血至歼灭) |
-| b4da174 | fix 撤退到达敌方驻军省应变攻方开战(非直接占领) |
-| e09fc21 | fix 战败撤退瞬间归属地变目的地(防瞬移BUG) |
-| 9bc01c1 | feat 支援攻击(support_attack)— 师不移动的远程攻击 |
-| d0dc0d9 | feat 停止命令(stop_order)— 取消主动行动保留被动防守 |
-| 353a0ca | feat 防守主动撤退 — 战斗地块下移动到己方省变撤退 |
-| 2a7207a | feat 预备队判定时机 — 部署阶段同方向都进前线 |
-
-## 8b. 本阶段(2026-06-23)完成的提交 — 多段路径行军
-
-| 提交 | 内容 |
-|---|---|
-| 033876e | refactor Moving 加 remaining 字段(多段路径地基, 单段行为不变) |
-| 2073b1e | feat pathfinding.rs BFS 寻路模块 + is_passable 插槽 |
-| f2d4b2f | feat move_division 接入 BFS 寻路 + 边界B/C 处理 |
-| 8554d23 | feat 到达中途省后续走(决策5) — Capture 后检查 remaining |
-| 91d2b6c | feat Pending 战斗胜利后续走 — Pending 加 remaining 字段 |
-| e6d0f97 | feat support_attack 邻接收敛(决策13) — 只能相邻省发起 |
-| 2067e1d | feat queue_move 航点追加命令(决策9) — 手机端友好 |
-| bfd67e7 | feat 路径失效应对(决策14) — dest 不可进入则停止 + invalidate 函数 |
-| 12d2502 | feat wasm engine_queue_move FFI |
-| 41f4906 | test 多段行军边界测试补全(决策11/12) |
-
-## 8c. UI 路径可视化 + 地图扩展(2026-06-23, 同阶段)
-
-| 改动 | 内容 |
-|---|---|
-| wasm_api path 字段 | 序列化暴露完整路径 [orig,dest,...remaining] 给 JS |
-| UI 箭头系统 | 一条完整折线箭头(头在目的地)+ 重合边平行车道偏移 + 加粗军事箭头头 + 追加航点按钮 |
-| 10省对垒地图 | 上排1-5 GER / 下排6-10 FRA, 横向+纵向+斜向完整邻接(多路夹击) |
-| 回归测试 | t_queue_move_then_queue_roundtrip_keeps_full_path(去回全程不丢前段) |
-
-**注**: 箭头圆角转弯(掉头点大U弧)多次尝试(贝塞尔/arcTo/切线圆弧)均有几何问题,当前用 lineJoin='round'+粗线宽的朴素方案(圆角幅度有限),留作后续优化。
+- **借用冲突**: get_mut 持有借用时不能再 world.divisions.values(), 用快照→计算→写回模式
+- **敌人判定**: 用 are_at_war/enemies_of, 不能用 owner_tag != owner(那是旧的全员敌对)
+- **省份归属**: 用 province_controller/province_owner 派生查询, 不能直接读 Province(已无 owner/controller 字段)
+- **recovery 借用**: 遍历 divisions.values_mut 时查 controller 必须内联字段访问(provinces/states分离借用)
