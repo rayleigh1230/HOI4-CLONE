@@ -514,6 +514,8 @@ fn serialize_state(world: &World) -> String {
         }
         s.push_str("]}");
     }
+    // 闭合 provinces 数组(provinces 总数组, 上面各个省已闭合各自对象)
+    s.push_str("]");
     // 战争列表(显式 declare_war 建立; are_at_war 判定依据)
     s.push_str(",\"wars\":[");
     let mut wfirst = true;
