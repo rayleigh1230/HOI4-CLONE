@@ -166,11 +166,15 @@ pub fn register(reg: &mut Registry) {
         // 1) 按营数: battalions=7 + equipment=infantry_equipment → 自动算真实数值(1936, 旧路径)
         // 2) 手填: 显式给 soft_attack/defense/... (兼容旧脚本)
         if let Some(tmpl_name) = ParamGet::get(p, "template").and_then(Arg::as_str) {
-            // 新路径: 数据驱动汇总
-            let stats = match w.data.templates.get(tmpl_name) {
+            // 新路径: 数据驱动汇总(返回统计 + 未知营告警)
+            let (stats, warnings) = match w.data.templates.get(tmpl_name) {
                 Some(t) => t.to_division_stats(&w.data),
                 None => return Err(CmdError::RuntimeError(format!("未知模板: {tmpl_name}"))),
             };
+            // 告警透传到 stderr(不阻断建师, 对齐 Paradox 容错)
+            for warn in &warnings {
+                eprintln!("[create_division] ⚠️ {warn}");
+            }
             let d = build_division_from_stats(owner, loc, stats);
             w.add_division(d);
             return Ok(());

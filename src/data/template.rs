@@ -44,16 +44,28 @@ pub struct DivisionStats {
 }
 
 impl DivisionTemplate {
-    /// 汇总成 Division 所需属性
-    pub fn to_division_stats(&self, data: &GameData) -> DivisionStats {
-        // 收集战斗营(sub_unit 定义 + 战斗属性)
+    /// 汇总成 Division 所需属性。返回 (统计, 未知营告警列表)。
+    /// 未知营(不在 sub_units 里)进告警列表并跳过, 不 panic(对齐 Paradox 容错哲学)。
+    pub fn to_division_stats(&self, data: &GameData) -> (DivisionStats, Vec<String>) {
+        let mut warnings = Vec::new();
+
+        // 收集战斗营: 已知营进入汇总, 未知营告警+跳过
         let regiments: Vec<(&SubUnitDef, EquipStats)> = self
             .regiments
             .iter()
-            .filter_map(|r| data.sub_units.get(&r.sub_unit).map(|su| {
-                let stats = su.combat_stats(data);
-                (su, stats)
-            }))
+            .filter_map(|r| match data.sub_units.get(&r.sub_unit) {
+                Some(su) => {
+                    let stats = su.combat_stats(data);
+                    Some((su, stats))
+                }
+                None => {
+                    warnings.push(format!(
+                        "模板 \"{}\" 引用未知营 \"{}\", 已跳过",
+                        self.name, r.sub_unit
+                    ));
+                    None
+                }
+            })
             .collect();
 
         let mut stats = DivisionStats::default();
@@ -101,17 +113,25 @@ impl DivisionTemplate {
                 / total_w;
         }
 
-        // 支援连: 自身属性求和(combat_width=0 不增加师总宽度)
+        // 支援连: 已知营汇总属性, 未知营告警+跳过
         for se in &self.support {
-            if let Some(su) = data.sub_units.get(&se.sub_unit) {
-                let cs = su.combat_stats(data);
-                stats.soft_attack += cs.soft_attack;
-                stats.hard_attack += cs.hard_attack;
-                stats.defense += cs.defense;
-                stats.breakthrough += cs.breakthrough;
-                stats.max_strength += su.max_strength;
-                stats.manpower_need += su.manpower;
-                // battalion_mult 本次记录但不应用具体战斗修正(需匹配战斗营 category, 结构就位)
+            match data.sub_units.get(&se.sub_unit) {
+                Some(su) => {
+                    let cs = su.combat_stats(data);
+                    stats.soft_attack += cs.soft_attack;
+                    stats.hard_attack += cs.hard_attack;
+                    stats.defense += cs.defense;
+                    stats.breakthrough += cs.breakthrough;
+                    stats.max_strength += su.max_strength;
+                    stats.manpower_need += su.manpower;
+                    // battalion_mult 本次记录但不应用具体战斗修正(需匹配战斗营 category, 结构就位)
+                }
+                None => {
+                    warnings.push(format!(
+                        "模板 \"{}\" 支援连引用未知营 \"{}\", 已跳过",
+                        self.name, se.sub_unit
+                    ));
+                }
             }
         }
 
@@ -131,7 +151,7 @@ impl DivisionTemplate {
             }
         }
 
-        stats
+        (stats, warnings)
     }
 }
 
@@ -185,6 +205,26 @@ mod tests {
     use super::*;
     use crate::data::equipment::EquipmentDef;
 
+    #[test]
+    fn t_unknown_subunit_warned_not_silent() {
+        // 模板引用未知营 ghost_battalion → 应进告警列表 + 跳过, 不 panic, 已知营正常汇总
+        let data = test_data();
+        let tmpl = DivisionTemplate {
+            name: "mixed".into(),
+            regiments: vec![
+                RegimentEntry { sub_unit: "infantry".into(), x: 0, y: 0 },
+                RegimentEntry { sub_unit: "ghost_battalion".into(), x: 1, y: 0 },
+            ],
+            support: vec![],
+        };
+        let (stats, warnings) = tmpl.to_division_stats(&data);
+        // 已知 infantry 营正常汇总(soft_attack 3)
+        assert!((stats.soft_attack - 3.0).abs() < 1e-9, "已知营应正常汇总");
+        // 未知营进告警列表
+        assert_eq!(warnings.len(), 1, "应产生 1 条告警, 实际 {:?}", warnings);
+        assert!(warnings[0].contains("ghost_battalion"), "告警应含未知营名");
+    }
+
     /// 构造测试 GameData: 1个步兵装备 + 1个步兵营
     fn test_data() -> GameData {
         let mut d = GameData::default();
@@ -230,7 +270,7 @@ mod tests {
             regiments: vec![RegimentEntry { sub_unit: "infantry".into(), x: 0, y: 0 }; 7],
             support: vec![],
         };
-        let s = tmpl.to_division_stats(&data);
+        let (s, _warnings) = tmpl.to_division_stats(&data);
         assert!((s.soft_attack - 21.0).abs() < 1e-9, "soft 应 21, 实际 {}", s.soft_attack);
         assert!((s.defense - 140.0).abs() < 1e-9);
         assert!((s.max_strength - 175.0).abs() < 1e-9);
@@ -287,7 +327,7 @@ mod tests {
             ],
             support: vec![],
         };
-        let s = tmpl.to_division_stats(&data);
+        let (s, _warnings) = tmpl.to_division_stats(&data);
         assert!(
             (s.armor - 35.0).abs() < 1e-9,
             "装甲加权混合应 35, 实际 {}",
@@ -337,7 +377,7 @@ mod tests {
             regiments: vec![RegimentEntry { sub_unit: "infantry".into(), x: 0, y: 0 }; 7],
             support: vec![RegimentEntry { sub_unit: "engineer".into(), x: 0, y: 0 }],
         };
-        let s = tmpl.to_division_stats(&data);
+        let (s, _warnings) = tmpl.to_division_stats(&data);
         // 7步宽度 14, 加工兵(0)仍是 14
         assert!((s.combat_width - 14.0).abs() < 1e-9);
         // HP 增加: 7×25 + 2 = 177
