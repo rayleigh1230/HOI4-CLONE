@@ -11,10 +11,36 @@
 
 ### 查证优先级(从高到低)
 
-1. **原版数据文件**(`src/data_raw/` 已嵌入的; 或原版 `common/` 目录) — 真实数据是最终事实
+1. **原版数据文件** — 真实数据是最终事实(见下方"原版游戏路径")。一个属性在文件里怎么写, 引擎就必须怎么解析。**wiki 数值可能过时/不准, 与数据文件冲突时以数据文件为准。**
 2. **defines**(`common/defines/00_defines.lua`) — 数值常量和机制边界
-3. **wiki**([hoi4.paradoxwikis.com](https://hoi4.paradoxwikis.com)) — 机制说明和公式
+3. **wiki**([hoi4.paradoxwikis.com](https://hoi4.paradoxwikis.com)) — 机制说明和公式(数值以数据文件为准)
 4. **社区讨论** — 模糊规则澄清, 但要交叉验证
+
+### 原版游戏路径(查证时去这看)
+
+```
+原版安装目录:  G:\Steam\steamapps\common\Hearts of Iron IV
+  └── common\                      ← 数据文件根目录(查证主战场)
+      ├── defines\00_defines.lua   ← 所有数值常量(NMilitary/NCountry/NEconomy...)
+      ├── terrain\00_terrain.txt   ← 地形(combat_width/attack惩罚/movement_cost)
+      ├── technologies\            ← 科技树(17 文件)
+      ├── ideas\                   ← 国家精神/制造商/政体(209 文件)
+      ├── buildings\               ← 建筑定义(2 文件)
+      ├── units\equipment\         ← 装备定义(49 文件)
+      ├── units\                   ← 营(sub_units)定义
+      ├── national_focus\          ← 国策树
+      ├── country_tags\            ← 国家 tag
+      └── ...
+  └── history\                     ← 1936/1939 剧本(countries/states/units)
+  └── map\                         ← 省份几何/邻接(真实地图数据)
+
+项目已嵌入的子集(编译期 include_str!, 见 src/data_raw/):
+  仅 equipment/artillery+infantry+tank_chassis、modules、units(部分)、
+  history/GER+FRA、states/1-France。**绝大多数原版数据未嵌入, 查证时直接读上面的原版目录。**
+```
+
+> 查证技巧: 数据文件常被 awk/grep 按 `terrain = {` 这样的块定位。例:
+> `cd "G:/Steam/steamapps/common/Hearts of Iron IV" && awk '/^	mountain = \{/,/^	\}/' common/terrain/00_terrain.txt`
 
 ### 必查清单(实现新机制前)
 
@@ -27,7 +53,8 @@
 
 ### 反面教训(已发生, 引以为戒)
 
-- **地形惩罚的攻守归属**(2026-06-26): 我凭直觉认为"谁开火罚谁", 把地形惩罚同时乘到攻方正向和守方反击。**查证后发现原版只罚攻方身份**(攻守身份整场战斗固定, 不随反击翻转), 且还漏罚了 breakthrough。返工修正。
+- **地形数值: wiki 不准, 数据文件才准**(2026-06-26): wiki 给 forest 攻方惩罚 -20%、mountain -60%。读原版 `common/terrain/00_terrain.txt` 实际是 forest **-15%**、mountain **-50%**, 且字段是 `units = { attack = -0.5 }`。marsh 宽度 wiki/我写成 54, 原版是 50。**先读数据文件, wiki 只作机制理解参考。**
+- **地形惩罚的攻守归属**(2026-06-26): 凭直觉"谁开火罚谁", 把地形惩罚同时乘到攻方正向和守方反击。查证原版后发现只罚攻方身份(攻守整场固定, 不随反击翻转), 且罚 attack 和 breakthrough 两个。返工修正。
 - **modifier 的 add/multiply**(2026-06-24): 最初设计"双模式"(显式标记 op), 查证后发现原版用属性名后缀(`_factor`)自动推导, 根本不需要标记。
 
 ### 实践准则
