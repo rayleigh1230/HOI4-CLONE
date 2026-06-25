@@ -5,6 +5,18 @@ use hoi4_clone::parser::{parse, Value};
 use hoi4_clone::runtime::entities::OrderState;
 use hoi4_clone::runtime::{GameClock, Interpreter, Registry, World};
 
+/// 测试辅助: 建省份 + 对应 State(归属从 State 派生)
+fn add_test_province(w: &mut World, id: u32, owner: &str, neighbors: Vec<u32>) {
+    let sid = id * 1000;
+    w.states.insert(sid, hoi4_clone::runtime::State {
+        id: sid, owner: owner.into(), controller: owner.into(),
+        ..Default::default()
+    });
+    w.provinces.insert(id, hoi4_clone::runtime::Province {
+        id, state_id: sid, terrain: "plains".into(), neighbors,
+    });
+}
+
 /// 从脚本块中取出名为 key 的子块
 fn block_named<'a>(b: &'a hoi4_clone::parser::Block, key: &str) -> &'a hoi4_clone::parser::Block {
     let f = b.fields.iter().find(|f| f.key == key).unwrap_or_else(|| panic!("缺 {key}"));
@@ -20,18 +32,9 @@ fn setup_world() -> World {
     w.countries.insert("GER".into(), Default::default());
     w.countries.insert("FRA".into(), Default::default());
     // 省份布局: 1=战场, 10=GER后方, 20=FRA后方(让撤退师有处可退)
-    w.provinces.insert(1, hoi4_clone::runtime::Province {
-        id: 1, owner: "FRA".into(), controller: "FRA".into(),
-        terrain: "plains".into(), neighbors: vec![10, 20],
-    });
-    w.provinces.insert(10, hoi4_clone::runtime::Province {
-        id: 10, owner: "GER".into(), controller: "GER".into(),
-        terrain: "plains".into(), neighbors: vec![1],
-    });
-    w.provinces.insert(20, hoi4_clone::runtime::Province {
-        id: 20, owner: "FRA".into(), controller: "FRA".into(),
-        terrain: "plains".into(), neighbors: vec![1],
-    });
+    add_test_province(&mut w, 1, "FRA", vec![10, 20]);
+    add_test_province(&mut w, 10, "GER", vec![1]);
+    add_test_province(&mut w, 20, "FRA", vec![1]);
     w
 }
 
@@ -391,10 +394,7 @@ fn surrounded_division_annihilated_on_retreat() {
     world.countries.insert("GER".into(), Default::default());
     world.countries.insert("FRA".into(), Default::default());
     // 孤立省1: 只有自己, 无任何邻接 → FRA 撤退时无处可退 → 歼灭
-    world.provinces.insert(1, hoi4_clone::runtime::Province {
-        id: 1, owner: "FRA".into(), controller: "FRA".into(),
-        terrain: "plains".into(), neighbors: vec![], // 无邻接!
-    });
+    add_test_province(&mut world, 1, "FRA", vec![]); // 无邻接!
     run_setup(&mut world, &interp, r#"
         _setup = {
             create_division = { owner = GER location = 1 equipment = medium_tank battalions = 7 }
@@ -423,14 +423,8 @@ fn retreating_division_moves_to_friendly_province() {
     world.countries.insert("GER".into(), Default::default());
     world.countries.insert("FRA".into(), Default::default());
     // 省1(战场) 邻接 省20(FRA后方)
-    world.provinces.insert(1, hoi4_clone::runtime::Province {
-        id: 1, owner: "FRA".into(), controller: "FRA".into(),
-        terrain: "plains".into(), neighbors: vec![20],
-    });
-    world.provinces.insert(20, hoi4_clone::runtime::Province {
-        id: 20, owner: "FRA".into(), controller: "FRA".into(),
-        terrain: "plains".into(), neighbors: vec![1],
-    });
+    add_test_province(&mut world, 1, "FRA", vec![20]);
+    add_test_province(&mut world, 20, "FRA", vec![1]);
     run_setup(&mut world, &interp, r#"
         _setup = {
             create_division = { owner = GER location = 1 equipment = medium_tank battalions = 7 }
@@ -463,14 +457,8 @@ fn attacker_captures_province_on_victory() {
     world.countries.insert("GER".into(), Default::default());
     world.countries.insert("FRA".into(), Default::default());
     // 省1(FRA控制, 战场) 邻接省20(FRA后方, 让FRA能撤退→战斗因撤退结束→攻方占省1)
-    world.provinces.insert(1, hoi4_clone::runtime::Province {
-        id: 1, owner: "FRA".into(), controller: "FRA".into(),
-        terrain: "plains".into(), neighbors: vec![20],
-    });
-    world.provinces.insert(20, hoi4_clone::runtime::Province {
-        id: 20, owner: "FRA".into(), controller: "FRA".into(),
-        terrain: "plains".into(), neighbors: vec![1],
-    });
+    add_test_province(&mut world, 1, "FRA", vec![20]);
+    add_test_province(&mut world, 20, "FRA", vec![1]);
     run_setup(&mut world, &interp, r#"
         _setup = {
             create_division = { owner = GER location = 1 equipment = medium_tank battalions = 7 }
@@ -478,12 +466,12 @@ fn attacker_captures_province_on_victory() {
             start_battle = { attacker = GER defender = FRA province = 1 }
         }
     "#);
-    assert_eq!(world.provinces.get(&1).unwrap().controller, "FRA", "开战前省1属FRA");
+    assert_eq!(world.province_controller(1).unwrap_or(""), "FRA", "开战前省1属FRA");
     GameClock::advance(&interp, &mut world, 40);
     // FRA 撤退 → 战斗结束 → GER 占领省1
     assert_eq!(
-        world.provinces.get(&1).unwrap().controller, "GER",
-        "攻方胜应占领省1, 实际: {}", world.provinces.get(&1).unwrap().controller
+        world.province_controller(1).unwrap_or(""), "GER",
+        "攻方胜应占领省1, 实际: {}", world.province_controller(1).unwrap_or("")
     );
 }
 
@@ -497,14 +485,8 @@ fn marching_division_loses_org() {
     let mut world = World::new();
     world.player_tag = "GER".into();
     world.countries.insert("GER".into(), Default::default());
-    world.provinces.insert(1, hoi4_clone::runtime::Province {
-        id: 1, owner: "GER".into(), controller: "GER".into(),
-        terrain: "plains".into(), neighbors: vec![2],
-    });
-    world.provinces.insert(2, hoi4_clone::runtime::Province {
-        id: 2, owner: "FRA".into(), controller: "FRA".into(),
-        terrain: "plains".into(), neighbors: vec![1],
-    });
+    add_test_province(&mut world, 1, "GER", vec![2]);
+    add_test_province(&mut world, 2, "FRA", vec![1]);
     run_setup(&mut world, &interp, r#"
         _setup = {
             create_division = { owner = GER location = 1 equipment = infantry_equipment battalions = 7 }
@@ -535,14 +517,8 @@ fn marching_in_friendly_territory_no_org_loss() {
     world.player_tag = "GER".into();
     world.countries.insert("GER".into(), Default::default());
     // 省1和省2都是GER己方
-    world.provinces.insert(1, hoi4_clone::runtime::Province {
-        id: 1, owner: "GER".into(), controller: "GER".into(),
-        terrain: "plains".into(), neighbors: vec![2],
-    });
-    world.provinces.insert(2, hoi4_clone::runtime::Province {
-        id: 2, owner: "GER".into(), controller: "GER".into(),
-        terrain: "plains".into(), neighbors: vec![1],
-    });
+    add_test_province(&mut world, 1, "GER", vec![2]);
+    add_test_province(&mut world, 2, "GER", vec![1]);
     run_setup(&mut world, &interp, r#"
         _setup = { create_division = { owner = GER location = 1 equipment = infantry_equipment battalions = 7 } }
     "#);
@@ -593,14 +569,8 @@ fn move_to_empty_province_no_battle() {
     world.player_tag = "GER".into();
     world.countries.insert("GER".into(), Default::default());
     // 省10(GER) 邻接 省1(GER空省, 无部队)
-    world.provinces.insert(10, hoi4_clone::runtime::Province {
-        id: 10, owner: "GER".into(), controller: "GER".into(),
-        terrain: "plains".into(), neighbors: vec![1],
-    });
-    world.provinces.insert(1, hoi4_clone::runtime::Province {
-        id: 1, owner: "GER".into(), controller: "GER".into(),
-        terrain: "plains".into(), neighbors: vec![10],
-    });
+    add_test_province(&mut world, 10, "GER", vec![1]);
+    add_test_province(&mut world, 1, "GER", vec![10]);
     run_setup(&mut world, &interp, r#"
         _setup = { create_division = { owner = GER location = 10 equipment = infantry_equipment battalions = 7 } }
     "#);
@@ -629,14 +599,8 @@ fn march_into_empty_enemy_province_captures() {
     world.player_tag = "GER".into();
     world.countries.insert("GER".into(), Default::default());
     // 省1(GER) 邻接 省2(FRA空省, 无防御部队)
-    world.provinces.insert(1, hoi4_clone::runtime::Province {
-        id: 1, owner: "GER".into(), controller: "GER".into(),
-        terrain: "plains".into(), neighbors: vec![2],
-    });
-    world.provinces.insert(2, hoi4_clone::runtime::Province {
-        id: 2, owner: "FRA".into(), controller: "FRA".into(),
-        terrain: "plains".into(), neighbors: vec![1],
-    });
+    add_test_province(&mut world, 1, "GER", vec![2]);
+    add_test_province(&mut world, 2, "FRA", vec![1]);
     run_setup(&mut world, &interp, r#"
         _setup = { create_division = { owner = GER location = 1 equipment = infantry_equipment battalions = 7 } }
     "#);
@@ -652,7 +616,7 @@ fn march_into_empty_enemy_province_captures() {
     // 推进到达(进军速度慢, 给足时间)
     GameClock::advance(&interp, &mut world, 100);
     assert_eq!(world.divisions.get(&ger_id).unwrap().location_province, 2, "应到达省2");
-    assert_eq!(world.provinces.get(&2).unwrap().controller, "GER", "到达应占领省2");
+    assert_eq!(world.province_controller(2).unwrap_or(""), "GER", "到达应占领省2");
 }
 
 #[test]
@@ -686,7 +650,7 @@ fn frontline_route_causes_reserve_routing() {
     GameClock::advance(&interp, &mut world, 100);
     // FRA 前线全崩 → 战斗结束 + GER 到达占地
     assert_eq!(world.battles.len(), 0, "前线崩后战斗应结束");
-    assert_eq!(world.provinces.get(&1).unwrap().controller, "GER", "应占领省1");
+    assert_eq!(world.province_controller(1).unwrap_or(""), "GER", "应占领省1");
     // FRA 师应撤退(非歼灭, org归零HP有余)
     let fra_alive = world.divisions.values().filter(|d| d.owner_tag == "FRA").count();
     assert!(fra_alive > 0, "FRA 师应撤退存活(非歼灭)");
@@ -750,18 +714,9 @@ fn retreating_division_not_reengaged_by_check_engagements() {
     world.countries.insert("GER".into(), Default::default());
     world.countries.insert("FRA".into(), Default::default());
     // UI 默认布局: 省1(FRA) 邻省2(GER)和省3(FRA, 撤退目标)
-    world.provinces.insert(1, hoi4_clone::runtime::Province {
-        id: 1, owner: "FRA".into(), controller: "FRA".into(),
-        terrain: "plains".into(), neighbors: vec![2, 3],
-    });
-    world.provinces.insert(2, hoi4_clone::runtime::Province {
-        id: 2, owner: "GER".into(), controller: "GER".into(),
-        terrain: "plains".into(), neighbors: vec![1],
-    });
-    world.provinces.insert(3, hoi4_clone::runtime::Province {
-        id: 3, owner: "FRA".into(), controller: "FRA".into(),
-        terrain: "plains".into(), neighbors: vec![1],
-    });
+    add_test_province(&mut world, 1, "FRA", vec![2, 3]);
+    add_test_province(&mut world, 2, "GER", vec![1]);
+    add_test_province(&mut world, 3, "FRA", vec![1]);
     run_setup(&mut world, &interp, r#"
         _setup = {
             create_division = { owner = GER location = 2 equipment = medium_tank battalions = 7 }
@@ -817,14 +772,8 @@ fn retreating_into_enemy_occupied_province_starts_battle() {
     //   check_engagements → 撤退师变攻方开战
     use hoi4_clone::combat::movement::{advance_movement, check_engagements};
     let mut world = World::new();
-    world.provinces.insert(1, hoi4_clone::runtime::Province {
-        id: 1, owner: "FRA".into(), controller: "FRA".into(),
-        terrain: "plains".into(), neighbors: vec![20],
-    });
-    world.provinces.insert(20, hoi4_clone::runtime::Province {
-        id: 20, owner: "GER".into(), controller: "GER".into(),
-        terrain: "plains".into(), neighbors: vec![1],
-    });
+    add_test_province(&mut world, 1, "FRA", vec![20]);
+    add_test_province(&mut world, 20, "GER", vec![1]);
     // FRA 师在省1, 撤退中, 目标省20, 进度几乎满(1次 advance 即到达)
     let fra = world.add_division(hoi4_clone::runtime::entities::Division {
         owner_tag: "FRA".into(), location_province: 1,
@@ -843,11 +792,10 @@ fn retreating_into_enemy_occupied_province_starts_battle() {
     advance_movement(&mut world);
 
     // 核心断言1: 省20 不应被占领(仍属 GER)
-    let prov20 = world.provinces.get(&20).unwrap();
     assert_eq!(
-        prov20.controller, "GER",
+        world.province_controller(20).unwrap_or(""), "GER",
         "撤退师到达敌方驻军省不应直接占领(当前 controller={})",
-        prov20.controller
+        world.province_controller(20).unwrap_or("")
     );
     // 核心断言2: 撤退师进入 Pending(等开战), 不再是 Retreating(即将变攻方)
     let fra_div = world.divisions.get(&fra).unwrap();
@@ -872,14 +820,8 @@ fn retreating_to_enemy_province_then_loses_continues_retreat_or_dies() {
     use hoi4_clone::combat::movement::{advance_movement, check_engagements};
     use hoi4_clone::combat::resolve::resolve_all_battles;
     let mut world = World::new();
-    world.provinces.insert(1, hoi4_clone::runtime::Province {
-        id: 1, owner: "FRA".into(), controller: "FRA".into(),
-        terrain: "plains".into(), neighbors: vec![20],
-    });
-    world.provinces.insert(20, hoi4_clone::runtime::Province {
-        id: 20, owner: "GER".into(), controller: "GER".into(),
-        terrain: "plains".into(), neighbors: vec![1],
-    });
+    add_test_province(&mut world, 1, "FRA", vec![20]);
+    add_test_province(&mut world, 20, "GER", vec![1]);
     // FRA 师: org很低(刚被打崩), 撤退到省20(GER驻军). 它会变攻方但打不过.
     let fra = world.add_division(hoi4_clone::runtime::entities::Division {
         owner_tag: "FRA".into(), location_province: 1,
@@ -913,7 +855,7 @@ fn retreating_to_enemy_province_then_loses_continues_retreat_or_dies() {
 
     // 核心: FRA 不应占领省20(它败了)
     assert_eq!(
-        world.provinces.get(&20).unwrap().controller, "GER",
+        world.province_controller(20).unwrap_or(""), "GER",
         "FRA 战败, 省20 应仍属 GER"
     );
     // FRA 应存活: 攻方战败, 归属地省20(GER)非己方 → 进 Retreating 撤向邻省省1
@@ -1148,16 +1090,16 @@ fn support_only_does_not_capture_province() {
         attackers: vec![sup_id], defenders: vec![fra_id],
         ..Default::default()
     });
-    assert_eq!(world.provinces.get(&1).unwrap().controller, "FRA", "开战前省1属FRA");
+    assert_eq!(world.province_controller(1).unwrap_or(""), "FRA", "开战前省1属FRA");
 
     resolve_all_battles(&mut world);
 
     // 守方 FRA 前线崩 → 战斗结束。攻方只有支援师(location=省10≠省1)
     // → attacker_present=false → 不占地
-    let prov1 = world.provinces.get(&1).unwrap();
+    let prov1_ctrl = world.province_controller(1).unwrap_or("");
     assert_eq!(
-        prov1.controller, "FRA",
-        "只剩支援攻方(location≠省1)不应占领省1, 实际={}", prov1.controller
+        prov1_ctrl, "FRA",
+        "只剩支援攻方(location≠省1)不应占领省1, 实际={}", prov1_ctrl
     );
 }
 
@@ -1256,18 +1198,9 @@ fn stop_keeps_passive_defense() {
     world.countries.insert("GER".into(), Default::default());
     world.countries.insert("FRA".into(), Default::default());
     // 省10(GER) 邻接省1(FRA)和省2(FRA空); 省1(FRA)也邻接省10
-    world.provinces.insert(10, hoi4_clone::runtime::Province {
-        id: 10, owner: "GER".into(), controller: "GER".into(),
-        terrain: "plains".into(), neighbors: vec![1, 2],
-    });
-    world.provinces.insert(1, hoi4_clone::runtime::Province {
-        id: 1, owner: "FRA".into(), controller: "FRA".into(),
-        terrain: "plains".into(), neighbors: vec![10],
-    });
-    world.provinces.insert(2, hoi4_clone::runtime::Province {
-        id: 2, owner: "FRA".into(), controller: "FRA".into(),
-        terrain: "plains".into(), neighbors: vec![10],
-    });
+    add_test_province(&mut world, 10, "GER", vec![1, 2]);
+    add_test_province(&mut world, 1, "FRA", vec![10]);
+    add_test_province(&mut world, 2, "FRA", vec![10]);
     run_setup(&mut world, &interp, r#"
         _setup = {
             create_division = { owner = GER location = 10 soft_attack = 30 defense = 40 max_org = 60 }
@@ -1471,18 +1404,9 @@ fn after_started_same_origin_goes_reserve() {
 fn chain_world_owned() -> World {
     let mut w = World::new();
     w.player_tag = "GER".into();
-    w.provinces.insert(1, hoi4_clone::runtime::Province {
-        id: 1, owner: "GER".into(), controller: "GER".into(),
-        terrain: "plains".into(), neighbors: vec![2],
-    });
-    w.provinces.insert(2, hoi4_clone::runtime::Province {
-        id: 2, owner: "GER".into(), controller: "GER".into(),
-        terrain: "plains".into(), neighbors: vec![1, 3],
-    });
-    w.provinces.insert(3, hoi4_clone::runtime::Province {
-        id: 3, owner: "GER".into(), controller: "GER".into(),
-        terrain: "plains".into(), neighbors: vec![2],
-    });
+    add_test_province(&mut w, 1, "GER", vec![2]);
+    add_test_province(&mut w, 2, "GER", vec![1, 3]);
+    add_test_province(&mut w, 3, "GER", vec![2]);
     w
 }
 
@@ -1539,10 +1463,7 @@ fn t_find_path_no_route_ignored() {
     let interp = Interpreter::new(reg);
     let mut world = chain_world_owned();
     // 加一个孤立省 99(与任何省都不邻接)
-    world.provinces.insert(99, hoi4_clone::runtime::Province {
-        id: 99, owner: "GER".into(), controller: "GER".into(),
-        terrain: "plains".into(), neighbors: vec![],
-    });
+    add_test_province(&mut world, 99, "GER", vec![]);
     run_setup(&mut world, &interp, r#"
         _setup = { create_division = { owner = GER location = 1 soft_attack = 10 defense = 10 max_org = 60 } }
     "#);
@@ -1612,10 +1533,7 @@ fn support_attack_invalid_when_non_adjacent() {
     // 先停止, 重置
     run_cmd(&mut world, &interp, &format!("stop_order = {{ division = {ger_id} }}"));
     // 加一个省 30(与省10 不相邻, 孤立)
-    world.provinces.insert(30, hoi4_clone::runtime::Province {
-        id: 30, owner: "FRA".into(), controller: "FRA".into(),
-        terrain: "plains".into(), neighbors: vec![],
-    });
+    add_test_province(&mut world, 30, "FRA", vec![]);
     // 支援省30(与省10 不相邻) — 应静默无效
     run_cmd(&mut world, &interp, &format!("support_attack = {{ division = {ger_id} target = 30 }}"));
     assert!(!world.divisions.get(&ger_id).unwrap().is_supporting(), "不相邻省支援应无效");
@@ -1629,10 +1547,7 @@ fn t_queue_move_appends_waypoint() {
     let interp = Interpreter::new(reg);
     let mut world = chain_world_owned(); // 1-2-3 全 GER
     // 扩展到 4 省: 1-2-3-4(双向邻接)
-    world.provinces.insert(4, hoi4_clone::runtime::Province {
-        id: 4, owner: "GER".into(), controller: "GER".into(),
-        terrain: "plains".into(), neighbors: vec![3],
-    });
+    add_test_province(&mut world, 4, "GER", vec![3]);
     world.provinces.get_mut(&3).unwrap().neighbors.push(4);
     // 建师在省1
     run_setup(&mut world, &interp, r#"
@@ -1657,14 +1572,8 @@ fn t_queue_move_then_queue_roundtrip_keeps_full_path() {
     register_all(&mut reg);
     let interp = Interpreter::new(reg);
     let mut world = chain_world_owned();
-    world.provinces.insert(4, hoi4_clone::runtime::Province {
-        id: 4, owner: "GER".into(), controller: "GER".into(),
-        terrain: "plains".into(), neighbors: vec![3, 5],
-    });
-    world.provinces.insert(5, hoi4_clone::runtime::Province {
-        id: 5, owner: "GER".into(), controller: "GER".into(),
-        terrain: "plains".into(), neighbors: vec![4],
-    });
+    add_test_province(&mut world, 4, "GER", vec![3, 5]);
+    add_test_province(&mut world, 5, "GER", vec![4]);
     world.provinces.get_mut(&3).unwrap().neighbors.push(4);
     run_setup(&mut world, &interp, r#"
         _setup = { create_division = { owner = GER location = 1 soft_attack = 10 defense = 10 max_org = 60 } }

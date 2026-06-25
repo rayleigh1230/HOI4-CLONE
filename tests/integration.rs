@@ -119,12 +119,15 @@ fn focus_afghanistan_real_fragment() {
             ..Default::default()
         },
     );
+    let sid = 1 * 1000;
+    world.states.insert(sid, hoi4_clone::runtime::State {
+        id: sid, owner: "AFG".into(), controller: "AFG".into(),
+        ..Default::default()
+    });
     world.provinces.insert(
         1,
         hoi4_clone::runtime::Province {
-            id: 1,
-            owner: "AFG".into(),
-            controller: "AFG".into(),
+            id: 1, state_id: sid,
             terrain: "mountain".into(),
             ..Default::default()
         },
@@ -242,8 +245,10 @@ fn t_country_modifier_affects_combat() {
     let battle_setup = r#"
         create_division = { owner = GER location = 1 soft_attack = 30 hard_attack = 0 defense = 10 max_strength = 100 }
         create_division = { owner = FRA location = 2 soft_attack = 0 hard_attack = 0 defense = 10 max_strength = 100 }
-        create_province = { id = 1 owner = GER neighbors = { 2 } }
-        create_province = { id = 2 owner = FRA neighbors = { 1 } }
+        create_state = { id = 1000 owner = GER }
+        create_state = { id = 2000 owner = FRA }
+        create_province = { id = 1 state = 1000 neighbors = { 2 } }
+        create_province = { id = 2 state = 2000 neighbors = { 1 } }
         start_battle = { attacker = GER defender = FRA province = 2 }
     "#;
     interp.run(&lower_effects(&parse(battle_setup).unwrap()), &mut w);

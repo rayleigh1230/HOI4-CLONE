@@ -136,8 +136,6 @@ mod tests {
         assert!((s.soft_attack - 3.0).abs() < 1e-9);
     }
 
-    use super::*;
-
     #[test]
     fn t_compute_stats_pure_base() {
         // 无模块: final = base

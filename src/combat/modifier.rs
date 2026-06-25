@@ -302,9 +302,12 @@ mod tests {
         });
         let div_id = w.add_division(div);
 
+        w.states.insert(1000, crate::runtime::State {
+            id: 1000, owner: "GER".into(), controller: "GER".into(),
+            ..Default::default()
+        });
         w.provinces.insert(1, crate::runtime::Province {
-            id: 1, owner: "GER".into(), controller: "GER".into(),
-            terrain: "plains".into(), neighbors: vec![],
+            id: 1, state_id: 1000, terrain: "plains".into(), neighbors: vec![],
         });
 
         let battle = Battle {

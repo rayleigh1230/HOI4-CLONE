@@ -9,25 +9,28 @@
 //! 重构后: safe_retreat_dest 检查 origin 是否己方; 省1 已丢 → 找邻省 → 都丢则歼灭。
 //! D 不应出现在敌占省1。
 use hoi4_clone::commands::register_all;
-use hoi4_clone::runtime::{Division, GameClock, Interpreter, Province, Registry, World};
+use hoi4_clone::runtime::{Division, GameClock, Interpreter, Registry, World};
 use hoi4_clone::runtime::entities::OrderState;
+
+/// 测试辅助: 建省份 + 对应 State(归属从 State 派生)
+fn add_test_province(w: &mut World, id: u32, owner: &str, neighbors: Vec<u32>) {
+    let sid = id * 1000;
+    w.states.insert(sid, hoi4_clone::runtime::State {
+        id: sid, owner: owner.into(), controller: owner.into(),
+        ..Default::default()
+    });
+    w.provinces.insert(id, hoi4_clone::runtime::Province {
+        id, state_id: sid, terrain: "plains".into(), neighbors,
+    });
+}
 
 fn make_world() -> World {
     let mut w = World::new();
     w.player_tag = "GER".into();
     // 省1=FRA(D 的 origin + 初始防守地, 后被占), 省2=FRA(撤退目标), 省3=GER(攻方来源)
-    w.provinces.insert(1, Province {
-        id: 1, owner: "FRA".into(), controller: "FRA".into(),
-        terrain: "plains".into(), neighbors: vec![2, 3],
-    });
-    w.provinces.insert(2, Province {
-        id: 2, owner: "FRA".into(), controller: "FRA".into(),
-        terrain: "plains".into(), neighbors: vec![1, 3],
-    });
-    w.provinces.insert(3, Province {
-        id: 3, owner: "GER".into(), controller: "GER".into(),
-        terrain: "plains".into(), neighbors: vec![1, 2],
-    });
+    add_test_province(&mut w, 1, "FRA", vec![2, 3]);
+    add_test_province(&mut w, 2, "FRA", vec![1, 3]);
+    add_test_province(&mut w, 3, "GER", vec![1, 2]);
     w
 }
 
@@ -81,7 +84,7 @@ fn t_no_teleport_to_enemy_origin_after_retreat() {
 
     // 阶段2: 模拟 D 的 origin 省1 被占(controller 变 GER)
     // 这是瞬移 bug 的关键: D 战败时若回 origin(省1), 会跳进敌占区
-    w.provinces.get_mut(&1).unwrap().controller = "GER".into();
+    w.set_state_controller(1, "GER");
 
     // 阶段3: 推进让 D 走完撤退/再战败
     for _ in 0..60 {
@@ -94,7 +97,7 @@ fn t_no_teleport_to_enemy_origin_after_retreat() {
     // 正确: safe_retreat_dest 检查 origin 非己方 → 找邻省省2(FRA) → 回省2; 或歼灭
     if let Some(d_final) = w.divisions.get(&d) {
         let loc = d_final.location_province;
-        let loc_controller = w.provinces.get(&loc).map(|p| p.controller.as_str()).unwrap_or("");
+        let loc_controller = w.province_controller(loc).unwrap_or("");
         assert_ne!(
             loc_controller, "GER",
             "瞬移 bug: D 战败后停在省{loc}(controller=GER 敌占区)。\

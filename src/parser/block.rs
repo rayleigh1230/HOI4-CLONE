@@ -83,8 +83,19 @@ fn parse_block(cur: &mut Cursor, expect_rbrace: bool) -> Result<Block, ParseErro
                     return Err(ParseError::Syntax { line: 0, msg: "意外的 }".into() });
                 }
             }
-            Token::Ident(key) => {
-                let key = key.clone();
+            // HOI4 原版: buildings 块里用省份 id(数字)作 key, 如 3838 = { naval_base = 0 }
+            // 把 Num key 转成字符串, 复用 ident 的解析逻辑
+            key_token => {
+                let key = match key_token {
+                    Token::Ident(s) => s.clone(),
+                    Token::Num(n) => n.to_string(),
+                    other => {
+                        return Err(ParseError::Syntax {
+                            line: 0,
+                            msg: format!("意外的 token: {other:?}"),
+                        })
+                    }
+                };
                 cur.pos += 1;
                 // HOI4 trigger 里常见裸比较: political_power >= 150
                 // 此时 ident 后跟比较运算符而非 =

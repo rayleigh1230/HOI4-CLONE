@@ -13,9 +13,11 @@ fn main() {
 
     // 场景: demo 配置 — 3省, 中坦 vs 步兵, 看撤退是否到达
     let script = r#"
-        create_province = { id = 1 owner = FRA neighbors = { 2 3 } }
-        create_province = { id = 2 owner = GER neighbors = { 1 } }
-        create_province = { id = 3 owner = FRA neighbors = { 1 } }
+        create_state = { id = 2000 owner = FRA }
+        create_state = { id = 1000 owner = GER }
+        create_province = { id = 1 state = 2000 neighbors = { 2 3 } }
+        create_province = { id = 2 state = 1000 neighbors = { 1 } }
+        create_province = { id = 3 state = 2000 neighbors = { 1 } }
         create_division = { owner = GER location = 1 equipment = medium_tank battalions = 7 }
         create_division = { owner = FRA location = 1 equipment = infantry_equipment battalions = 7 }
         start_battle = { attacker = GER defender = FRA province = 1 }

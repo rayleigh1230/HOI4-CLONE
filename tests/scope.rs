@@ -1,8 +1,20 @@
 //! 作用域枚举测试(M3-2)
 use hoi4_clone::ast::{Arg, Effect};
 use hoi4_clone::commands::register_all;
-use hoi4_clone::runtime::entities::{Country, Division, Province};
+use hoi4_clone::runtime::entities::{Country, Division};
 use hoi4_clone::runtime::{Interpreter, Registry, World};
+
+/// 测试辅助: 建省份 + 对应 State(归属从 State 派生)
+fn add_test_province(w: &mut World, id: u32, owner: &str, terrain: &str) {
+    let sid = id * 1000;
+    w.states.insert(sid, hoi4_clone::runtime::State {
+        id: sid, owner: owner.into(), controller: owner.into(),
+        ..Default::default()
+    });
+    w.provinces.insert(id, hoi4_clone::runtime::Province {
+        id, state_id: sid, terrain: terrain.into(), neighbors: vec![],
+    });
+}
 
 fn two_states_world() -> World {
     let mut w = World::new();
@@ -16,26 +28,8 @@ fn two_states_world() -> World {
             ..Default::default()
         },
     );
-    w.provinces.insert(
-        1,
-        Province {
-            id: 1,
-            owner: "GER".into(),
-            controller: "GER".into(),
-            terrain: "plains".into(),
-            ..Default::default()
-        },
-    );
-    w.provinces.insert(
-        2,
-        Province {
-            id: 2,
-            owner: "GER".into(),
-            controller: "GER".into(),
-            terrain: "forest".into(),
-            ..Default::default()
-        },
-    );
+    add_test_province(&mut w, 1, "GER", "plains");
+    add_test_province(&mut w, 2, "GER", "forest");
     w
 }
 
