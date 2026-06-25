@@ -1,7 +1,7 @@
 # hoi4-clone 项目交接文档
 
 > **用途**: 在新会话中继续开发。读本文件 + 列出的关键文件即可接上。
-> **更新**: 2026-06-25(demo 改造后修复 — canvas 脏标记崩溃/路径级绑定/底栏时间控制/overlay 分层/装备补给修正; 引入 Playwright 真机验证 13/13)
+> **更新**: 2026-06-25(游戏逻辑层完善 — 占领省份级/国家视角权限/省间距离+师速度/外交系统/拖拽下令交互; Playwright 22/22; 126 测试)
 
 ---
 
@@ -12,8 +12,9 @@
 - **位置**: `G:\projects\hoi4-clone\`
 - **运行**: `cargo test`(测试) / `cargo run --bin hoi4_demo`(CLI) / 浏览器 `http://127.0.0.1:8765`(UI demo)
 - **工具链**: `stable-x86_64-pc-windows-gnu`(rustup override 绑定)
-- **规模**: ~7400 行 Rust + UI + 原版数据, **180 测试**
-- **分支**: `feat/data-driven-engine`(37 个提交, 5 个基础构造里程碑)
+- **规模**: ~7800 行 Rust + UI(30+ JS 文件) + 原版数据, **126 Rust 测试 + 22 Playwright 验证**
+- **分支**: `feat/data-driven-engine`(本轮 25 个提交: 地图视觉 + 游戏逻辑完善)
+- **验证**: `node tests/web_demo.mjs`(Playwright, 用系统 Chrome channel:'chrome', 22 项端到端)
 
 ---
 
@@ -37,6 +38,33 @@
 | **demo 彻底改造** | 地图全屏+浮层/绑定式数据流/触屏/模板引用/ change_template/ 6图层Canvas / ES Module 四层架构 | 122+UI |
 | **demo 改造后修复+验证** | 见下方"demo 改造后修复"小节(9 项修复 + Playwright 真机验证 13/13) | 122+UI |
 | **地图视觉&战斗可视化改造** | 见下方"地图视觉改造"小节(13 Task + Playwright 17/17) | 122+UI |
+| **游戏逻辑层完善** | 见下方"游戏逻辑完善"小节(占领省份级/国家视角/移动距离+速度/外交/拖拽下令; 126 测试 + 22 验证) | 126+UI |
+
+### 游戏逻辑层完善(2026-06-25)
+
+地图视觉做完后, 实战暴露一批游戏逻辑缺陷 + 交互体验问题, 系统性修复并完善。每项对齐原版, 标注调研来源。
+
+| 改造 | 内容 | 对齐/来源 |
+|---|---|---|
+| **占领省份级** | Province 加 `controller: Option<String>`(None 从 State 派生, Some 省份级覆盖); `set_province_controller` 只改该省不蔓延; `province_controller` 优先读省份级。**根因**: 原 `set_state_controller` 改 State 级, 占领一省→整个 State 易主 | HOI4 省份级占领 |
+| **国家视角权限** | 4 个下令命令(move/support/queue/stop)加 `player_controls` 校验(owner!=player_tag 静默拒绝); player_tag 空时放行(CLI/测试兼容); create_division 不校验(setup 建双方合理); TDD `t_player_cannot_order_foreign_division` | HOI4 单国家控制(wiki/observe mode 调研) |
+| **省间距离 + 师速度** | SubUnitDef/DivisionStats/Division 加 `max_speed`(取最慢营); 营文件 light_armor=12/medium_armor=8; `province_position/distance`(重心欧氏距离=km); advance_movement 公式: `每小时推进度 = max_speed/(距离km×地形成本)`; 地形成本(terrain.txt): plains1.0/forest·hills1.5/mountain·marsh2.0/urban1.2; 战斗中×0.33; TDD `t_armor_moves_faster_than_infantry`(装甲3倍步兵) | HOI4 defines + terrain.txt + Land units wiki |
+| **外交系统** | diplomacyPanel 重写: 实时展示当前战争(GER⚔FRA)+阵营归属; 国家选择(A→B)+宣战/白和/创建阵营/加入阵营; 替代旧写死按钮 | — |
+| **部署区分国家** | deployPanel owner 锁定 player(只部署自己); _deployTemplate(owner,tmpl); 修复 deployTemplate 缺 owner 参数的 bug(原 owner=省id/loc=模板名) | — |
+| **拖拽下令交互** | 取消框选; 拖兵牌拉箭头指向目标省(原版核心交互); 拖动中鼠标悬停省实时金色高亮; 松开弹命令菜单; 左键拖空白/右键拖=平移; 战斗气泡点击→左侧出详情框(landcombatview, 不跳路由); 所有面板带关闭按钮+ESC | HOI4 拖拽下令 |
+| **切视角** | 顶栏"切控制权"(上帝模式)→"切视角"(弹 GER/FRA 选择 setPlayer 切 player_tag); 顶栏显示当前视角(👁 GER); 删除上帝模式改省归属 | HOI4 控制台 tag 切换 |
+
+**关键设计决策**(用户确认):
+- 占领=省份级 controller(非 demo 改 1省1State 取巧, 修引擎根因)
+- 国家视角=单国+可切视角(玩家只控制 player_tag, 切视角按钮切国家)
+- 距离=重心欧氏距离当 km(世界坐标 1000×700 抽象, 与前端 layout 网格一致)
+
+**踩坑记录**:
+- `deployTemplate(owner,loc,template)` 3 参, 部署 bug 是只传 2 参(owner 当了省id)。web_demo 固化"部署师数+1"回归测试。
+- Province 加 controller 字段后, 4 处测试构造点要补 `..Default::default()`(commands/modifier/movement/resolve.rs)。
+- 移动公式改后, 旧测试用 max_speed=0 走 MOVE_RATE 回退分支故仍过(兼容); 新公式靠 `t_armor_moves_faster` 专项验证。
+- 国家视角: 敌师兵牌拖拽不进 dragOrder(canCommand=false), 但点击可查看信息(onHit 兜底显示"非己方")。
+- 战斗触发条件: `check_engagements` 只对 Moving/Pending 师+目标省有敌军开战; demo setup 加进攻命令才有战斗。
 
 ### 地图视觉&战斗可视化改造(2026-06-25, 对齐 map-visual-overhaul spec)
 
@@ -199,19 +227,22 @@ src/
 ├── wasm_api.rs       WASM桥接(序列化省份controller/owner从State派生读)
 └── lib.rs / main.rs
 web/
-├── index.html              # 入口: 地图全屏 + 顶栏/底栏/抽屉/面板宿主
-├── css/app.css             # 移动优先全屏布局 + 组件样式
-└── js/                     # 25 文件 1166 行, ES Modules, 无构建
-    ├── main.js             # 启动: 装配 + 两段式交互 + 完整 setup
+├── index.html              # 入口: 地图全屏 + 顶栏/底栏/抽屉/面板宿主/命令菜单
+├── css/app.css             # 移动优先全屏布局 + 组件样式(NATO牌/战斗面板/外交面板)
+└── js/                     # ES Modules, 无构建
+    ├── main.js             # 启动: 拖拽下令交互 + 国家视角 + 完整 setup(GER 进攻省7)
     ├── engine/             # WASM 封装(wasm/state/commands)
-    ├── core/               # 通用框架(store/bind/router/canvas/input/el)
-    ├── map/                # 6 图层(layout+terrain/province/unit/order/combat/overlay)
-    ├── ui/                 # 复用组件(topbar/drawer/orderMenu/statbar)
-    └── views/              # 面板内容(deploy/diplo/unit/combat)
+    ├── core/               # 通用框架(store 路径级脏标记/bind/router/canvas/input/el)
+    ├── map/                # 6 图层(layout 多边形+地形+pointInPolygon/terrain/province/unit/order/combat/overlay)
+    ├── ui/                 # 复用组件(topbar 切视角/bottombar 时间/drawer/orderMenu/statbar)
+    └── views/              # 面板内容(deploy 锁player/diplo 战争+阵营/unit/combat landcombatview)
+tests/
+├── web_demo.mjs            # ★Playwright 端到端验证(22 项, 系统 Chrome channel:'chrome')
+└── demo-final.png          # 验证截图存证
 docs/
 ├── design-principles.md  ★复刻设计原则(原版是首要参考)
 ├── formulas/land-combat.md  陆战公式(四量模型/防御池/装甲/宽度)
-└── superpowers/      specs(6篇设计文档) + plans(7篇实现计划)
+└── superpowers/      specs + plans(地图视觉改造 + 游戏逻辑完善均含 spec/plan)
 ```
 
 ### 主循环顺序(clock.rs 每小时)
@@ -242,49 +273,74 @@ docs/
 | **地形** | terrain_modifiers 函数填真实值(替换占位空栈) |
 | **昼夜** | State纬度 + World.date().day_of_year() → darkness; CombatContext省份层加 night_modifier |
 | **补给** | 读 State.buildings(infrastructure); supply flow 沿 State 计算 |
-| **生产** | 读 State.buildings(industrial_complex/arms_factory); State.manpower(征兵) |
+| **生产** ★下一阶段 | 读 State.buildings(industrial_complex/arms_factory); 国家仓库 Country.equipment_stockpile(待加); reinforce 改从仓库扣减(不再从虚空) |
 | **剧本切换** | World初始化后运行 transfer_state 命令改 owner/controller |
-| **宣战/阵营** | declare_war / create_faction / join_faction |
-| **移动速度口子** | (modifier层未覆盖, 需要时加 MovementSpeed + movement.rs 口子) |
+| **宣战/阵营** | declare_war / create_faction / join_faction(**已实现**) |
+| **移动速度** | **已实现**: max_speed/(距离km×地形成本); Province.controller 省份级占领(已实现); 见"游戏逻辑层完善"小节 |
 
 **核心**: 后续系统只"往接口塞数据", 不改 resolve.rs / effective_* / width.rs / recovery.rs / State结构 / War结构。
 
 ---
 
-## 4. 下阶段方向: 完善 demo 做实际测试
+## 4. 下阶段方向: 生产 + 装备系统(下一阶段重点)
 
-**目标**: 把基础构造层接入 UI demo, 做端到端实际测试, 暴露架构问题。
+**目标**: 实现生产系统(工厂造装备) + 装备补充流(装备从仓库到师), 让"师的损耗→工厂补给→再战"闭环跑通。
 
-### 当前 demo 状态
+### 当前 demo 状态(已完善)
 
-- **web/index.html**: 单文件 UI(Canvas节点图 + 交战面板 + 弹菜单 + 进度箭头)
-- **10省对垒地图**: 上排 GER / 下排 FRA
-- **已有**: 师部署 + 移动/进军/支援攻击/停止命令 + 战斗可视化
-- **缺口**: demo 还用旧脚本(create_division battalions, 未接 create_state/template/declare_war); 数据驱动/State/战争的新能力未在 UI 体现
+- **地图**: 5列×2排多边形拼图 + 地形底色 + 固定世界坐标系(1000×700) + pan/zoom
+- **部队牌**: 完整 NATO 76×24(兵种+org/str竖条+数量+国旗边框+牌堆合并)
+- **战斗**: 带进度数字小圆(可点击)+landcombatview 风格详情面板; 省份级占领不蔓延
+- **交互**: 拖兵牌下令(原版)+战斗气泡出详情框+面板关闭+ESC
+- **国家视角**: 单国控制权限(player_controls)+切视角按钮+部署锁 player
+- **移动**: 省间距离(重心)+师速度(max_speed)+地形移动成本公式
+- **外交**: 战争/阵营状态展示+宣战/白和/阵营操作; 默认 GER⚔FRA 交战
+- **引擎**: 数据驱动建师(template)+change_template+declare_war+省份级controller
 
-### 未实现系统(按优先级, 供后续选择)
+### 下一阶段: 生产 + 装备系统
 
-| 系统 | 依赖的地基(都已就位) | 复杂度 |
+**为什么**: 现在师的装备是建师时满编(`engine_supply` 一次性补满), 战斗损耗后**没有补充流**——师打废了就废了。生产系统让工厂持续造装备入仓库, 增援从仓库补充到师, 形成"损耗→生产→补给→再战"闭环。这是 HOI4 经济与军事的核心纽带。
 
-| 系统 | 依赖的地基(都已就位) | 复杂度 |
-|---|---|---|
-| 国策系统 | modifier + date + war(trigger) | 中 |
-| 科技系统 | modifier + GameData(解锁装备) | 中 |
-| 生产系统 | State(buildings/manpower) | 中高 |
-| 补给系统 | State(buildings) + date | 高(HOI4最复杂) |
-| 外交系统 | war + faction | 中 |
-| 建筑系统 | State(buildings升级) | 中 |
-| 投降/和平会议 | war + State(victory_points待加) | 高 |
+**依赖的地基(都已就位)**:
+- `State.buildings`(已有, 含 industrial_complex/arms_factory 等建筑字段)
+- `Division.equipment_need/equipment_held`(M4a 装备库存/消耗已有)
+- `reinforce_all`(每日增援已有, 但只从"虚空"补, 不消耗仓库)
+- `GameData.equipment`(装备定义已有: chassis/module/整件装备模型)
+
+**预计要做的**:
+1. **国家仓库**(Country.equipment_stockpile): 存各装备类型的库存量
+2. **生产**(clock 每日): 工厂(industrial_complex/arms_factory)按建筑数×效率产装备入仓库
+3. **增援改造**(reinforce.rs): 师缺装备时从国家仓库扣减补充(不再从虚空); 仓库不足则缺编
+4. **UI**: 仓库面板(各装备库存)+生产概览(工厂产出); 师牌子显示装备满编度(eq_ratio 已有序列化)
+5. **建筑**(可选, 本次或后续): State.buildings 升级(建/拆工厂)
+
+**调研来源**(下一阶段实施时查):
+- 原版 `common/defines/00_defines.lua`: `BASE_FACTORY_SPEED`(5)/`BASE_FACTORY_SPEED_MIL`(4.5)、生产线相关
+- 原版 `documentation/effects_documentation.md`: `add_equipment`/`transfer_equipment`/`add_factory` 等
+- 原版 `common/buildings/`: 工厂建筑定义(industrial_complex/arms_factory 等)
+- HANDOFF §3 "基础构造层接口总结" 的"生产/补给"接入方式行
+
+### 其他未实现系统(优先级排序)
+
+| 系统 | 依赖 | 复杂度 | 备注 |
+|---|---|---|---|
+| **生产+装备补充** | State.buildings + equipment库存 | 中高 | **下一阶段重点** |
+| 补给系统 | State(buildings) + date + 距离 | 高 | HOI4 最复杂, 生产之后 |
+| 国策系统 | modifier + date + war | 中 | trigger/effect 已就位 |
+| 科技系统 | modifier + GameData | 中 | 解锁装备+加 modifier |
+| 建筑系统 | State(buildings 升级) | 中 | 可与生产一起做 |
+| 投降/和平会议 | war + State(vp) | 高 | 需 victory_points |
 
 ---
 
 ## 5. 新会话怎么接上
 
 1. 在 `G:\projects\hoi4-clone\` 开新对话
-2. 读本文件了解全局; 读 `docs/design-principles.md` 了解设计原则
+2. 读本文件了解全局; 读 `docs/design-principles.md` 了解设计原则(原版是首要参考)
 3. `git checkout feat/data-driven-engine`(若不在)
-4. 跑 `cargo test` 确认基线(**180测试**)
-5. 看 §4 选下一步(demo 完善 / 新系统)
+4. 跑 `cargo test` 确认基线(**126 测试**)
+5. (可选)跑 `node tests/web_demo.mjs` 确认 UI(需先 `cd web && python -m http.server 8765`)
+6. 看 §4 选下一步(**生产+装备系统**是推荐重点)
 
 ### 运行UI demo
 ```bash
@@ -307,5 +363,10 @@ cp target/wasm32-unknown-unknown/release/hoi4_clone.wasm web/
 - engine_tick: 必须用 GameClock::advance(完整主循环), 不能内联
 - **借用冲突**: get_mut 持有借用时不能再 world.divisions.values(), 用快照→计算→写回模式
 - **敌人判定**: 用 are_at_war/enemies_of, 不能用 owner_tag != owner(那是旧的全员敌对)
-- **省份归属**: 用 province_controller/province_owner 派生查询, 不能直接读 Province(已无 owner/controller 字段)
+- **省份归属**: province_controller/province_owner 派生查询。Province 现有 controller 字段(省份级占领, None 时回退 State)
 - **recovery 借用**: 遍历 divisions.values_mut 时查 controller 必须内联字段访问(provinces/states分离借用)
+- **国家视角**: 下令命令(move/support/queue/stop)有 player_controls 校验; player_tag 空(CLI/测试)才放行
+- **移动公式**: 每小时推进度 = max_speed/(距离×地形成本); max_speed=0 时回退 MOVE_RATE(兼容旧测试); 距离用 province_distance(重心欧氏)
+- **部署参数**: deployTemplate(owner, loc, template) 3 参, 缺 owner 会导致 owner=省id 的隐蔽 bug
+- **Province 加字段**: struct 加字段后, 显式构造点(commands/modifier/movement/resolve.rs 测试)要补 `..Default::default()`
+- **JS 调试钩子**: main.js 的 refresh 挂 `window._store` 供 Playwright 验证读 state(非生产代码但无害, web_demo 依赖它)
