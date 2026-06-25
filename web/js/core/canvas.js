@@ -12,7 +12,24 @@ export function init() {
   dpr = window.devicePixelRatio || 1;
   ctx = canvasEl.getContext('2d');
   resize();
-  window.addEventListener('resize', resize);
+  window.addEventListener('resize', () => { resize(); fitToWorld(); });
+  fitToWorld();
+}
+
+// 把世界(WORLD_W×WORLD_H)fit 到屏幕居中(等比缩放, 留边距)。
+// 对齐 spec §2.4: 相机初始定位让整张地图可见。
+// 注: WORLD_W/H 与 layout.js 保持一致(1000×700); canvas.js 是 core 层不依赖 map 层, 故局部定义。
+const WORLD_W = 1000, WORLD_H = 700;
+function fitToWorld() {
+  const W = canvasEl.clientWidth, H = canvasEl.clientHeight;
+  const margin = 20;
+  const scaleX = (W - margin * 2) / WORLD_W;
+  const scaleY = (H - margin * 2) / WORLD_H;
+  camera.zoom = Math.min(scaleX, scaleY);
+  // 居中: 世界中心(500,350)映射到屏幕中心(W/2,H/2)
+  camera.x = W / 2 - WORLD_W / 2 * camera.zoom;
+  camera.y = H / 2 - WORLD_H / 2 * camera.zoom;
+  fullRedraw = true;
 }
 
 function resize() {
