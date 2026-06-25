@@ -13,8 +13,15 @@ import * as combat from './map/layerCombat.js';
 import * as overlay from './map/layerOverlay.js';
 import { init as initDeploy } from './views/deployPanel.js';
 import { init as initDiplo } from './views/diplomacyPanel.js';
-import { init as initUnit } from './views/unitPanel.js';
+import { init as initUnitPanel } from './views/unitPanel.js';
 import { init as initCombat } from './views/combatPanel.js';
+import * as drawer from './ui/drawer.js';
+import * as orderMenu from './ui/orderMenu.js';
+import { statbar } from './ui/statbar.js';
+import { h } from './core/el.js';
+import { setProvinceController } from './engine/commands.js';
+import { provincePos } from './map/layout.js';
+import { selectProvince } from './map/layerProvince.js';
 
 // ===== tick 循环 + store 刷新 =====
 let autoTimer = null;
@@ -64,73 +71,63 @@ async function main() {
   // 注册系统面板
   initDeploy();
   initDiplo();
-  initUnit();
+  initUnitPanel();
   initCombat();
 
   // 顶栏渲染
   import('./ui/topbar.js').then(({ render }) => render());
 
-  // ===== 两段式交互(选师→点省弹菜单 / 点省弹抽屉) =====
+  // ===== 点击交互(同步注册, 立即生效) =====
   let selectedDiv = null;
-  let deployTarget = null;  // 部署模式: 选的模板名, 待点省
-  import('./map/layerProvince.js').then(({ selectProvince, getSelected }) => {
-    import('./map/layout.js').then(({ provincePos }) => {
-      import('./ui/topbar.js').then(({ isControlMode }) => {
-        import('./ui/orderMenu.js').then(menu => {
-          import('./ui/drawer.js').then(drawer => {
-            import('./ui/statbar.js').then(({ statbar }) => {
-              import('./core/el.js').then(({ h }) => {
-                import('./engine/commands.js').then(cmd => {
+  let deployTarget = null;
+
+  // 部署全局入口(给 deployPanel 用)
+  window._deployTemplate = (tmpl) => { deployTarget = tmpl; };
 
   input.onHit((wp, sx, sy) => {
     const view = store.state;
     if (!view?.provinces?.length) return false;
 
-    // 找最近的省份(worldToScreen 逆算)
+    // 找最近省份
     const ids = view.provinces.map(p => p.id);
     let best = null, bestD = 44;
     for (const p of view.provinces) {
       const sp = canvas.worldToScreen(provincePos(p.id, ids, window.innerWidth, window.innerHeight));
-      const d = Math.hypot(sp.x - (sx), sp.y - (sy));
+      const d = Math.hypot(sp.x - sx, sp.y - sy);
       if (d < bestD) { bestD = d; best = p.id; }
     }
     if (best == null) return false;
 
-    // 上帝模式: 切控制权
-    if (isControlMode()) {
+    // 上帝模式(切控制权)
+    const ctrlMode = window._controlMode || false;
+    if (ctrlMode) {
       const p = view.provinces.find(x => x.id === best);
-      if (p) {
-        cmd.setProvinceController(best, p.controller === 'GER' ? 'FRA' : 'GER');
-        log(`省${best} 控制权切换`);
-        refresh();
-      }
+      if (p) { setProvinceController(best, p.controller === 'GER' ? 'FRA' : 'GER'); refresh(); }
       return true;
     }
 
-    // 部署模式: 选省建师
+    // 部署模式
     if (deployTarget) {
-      cmd.deployTemplate(view.player || 'GER', best, deployTarget);
-      log(`部署 ${deployTarget}→省${best}`);
+      deployTemplate(best, deployTarget);
       deployTarget = null;
       drawer.close();
       refresh();
       return true;
     }
 
-    // 两段式: 已选师 → 弹命令菜单
+    // 已选师 → 点省弹命令菜单
     if (selectedDiv) {
-      menu.show(selectedDiv, best);
+      orderMenu.show(selectedDiv, best);
       selectedDiv = null;
       return true;
     }
 
-    // 选师(选中该省第一个师) 或 弹抽屉
+    // 选师或弹抽屉
     const divs = view.divisions?.filter(d => d.loc === best) || [];
+    const p = view.provinces.find(x => x.id === best);
+    selectProvince(best);
     if (divs.length > 0) {
       selectedDiv = divs[0].id;
-      log(`选中师#${selectedDiv}, 点目标省选命令`);
-      // 弹抽屉显示该省部队
-      const p = view.provinces.find(x => x.id === best);
       drawer.open([
         h('h3', { text: `📍 省${best} [${p?.controller || '?'}]` }),
         ...divs.map(d =>
@@ -141,34 +138,13 @@ async function main() {
         ),
       ]);
     } else {
-      const p = view.provinces.find(x => x.id === best);
       drawer.open(h('h3', { text: `📍 省${best} [${p?.controller || '?'}] — 无部队` }));
     }
-    selectProvince(best);
     refresh();
     return true;
   });
 
-  input.onBackground(() => {
-    selectedDiv = null;
-    drawer.close();
-    refresh();
-  });
-
-  // 部署函数暴露到全局(顶栏/部署面板调用)
-  window._deployTemplate = (tmpl) => { deployTarget = tmpl; };
-
-                });
-              });
-            });
-          });
-        });
-      });
-    });
-  });
-
-  // 顶栏渲染
-  import('./ui/topbar.js').then(({ render }) => render());
+  input.onBackground(() => { selectedDiv = null; drawer.close(); refresh(); });
 
   // 初始化场景(新基础构造: create_state + create_province state= + 显式 declare_war)
   setPlayer('GER');

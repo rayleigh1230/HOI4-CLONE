@@ -6,6 +6,7 @@ import { doTick, toggleTime } from '../main.js';
 import { setProvinceController } from '../engine/commands.js';
 
 let controlMode = false;
+window._controlMode = false;
 
 export function isControlMode() { return controlMode; }
 
@@ -41,7 +42,7 @@ export function render() {
   el.append(h('button', {
     class: 'secondary',
     style: { background: controlMode ? '#e94560' : '#0f3460' },
-    onclick() { controlMode = !controlMode; render(); },
+    onclick() { controlMode = !controlMode; window._controlMode = controlMode; render(); },
     text: controlMode ? '切换中...' : '切控制权',
   }));
 }
