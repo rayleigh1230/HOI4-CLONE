@@ -58,7 +58,8 @@ pub fn resolve_hour(
     let def_mods: Vec<&crate::combat::modifier::ModifierStack> =
         defenders.iter().map(|d| ctx.get(d.id)).collect();
     // 正向: 攻方 → 守方(守方用 defense 池; P1-5 所有攻击者共享消耗)
-    apply_all_attackers(&atk_stats, defenders, CombatPool::Defense, &def_mods);
+    // Defense 池不受地形罚(守方享受地形优势), 传 1.0
+    apply_all_attackers(&atk_stats, defenders, CombatPool::Defense, &def_mods, 1.0);
 }
 
 /// 哪一方的防御池: 守方用 defense, 攻方(被反击时)用 breakthrough
@@ -69,11 +70,17 @@ enum CombatPool {
 }
 
 impl CombatPool {
-    fn pool_value(self, d: &Division, mods: &crate::combat::modifier::ModifierStack) -> f64 {
+    /// 算目标的防御池值。
+    /// terrain_penalty: 地形对**攻方**的惩罚系数(0-1)。
+    ///   - Defense(守方挨正向攻击): 守方不受地形罚, 传 1.0(池不削)
+    ///   - Breakthrough(攻方挨反击): 攻方 breakthrough 受地形罚(对齐原版: 攻方 attack+breakthrough 都被罚)
+    fn pool_value(self, d: &Division, mods: &crate::combat::modifier::ModifierStack, terrain_penalty: f64) -> f64 {
         // M4a: 防御池也按装备充足度缩放 × modifier
         match self {
+            // 守方 defense 不受地形罚(守方享受地形优势)
             CombatPool::Defense => d.effective_defense(mods),
-            CombatPool::Breakthrough => d.effective_breakthrough(mods),
+            // 攻方 breakthrough 受地形罚(攻方挨反击时更脆)
+            CombatPool::Breakthrough => d.effective_breakthrough(mods) * terrain_penalty,
         }
     }
 }
@@ -86,6 +93,7 @@ fn apply_all_attackers(
     targets: &mut [&mut Division],
     pool: CombatPool,
     targets_mods: &[&crate::combat::modifier::ModifierStack],
+    terrain_penalty: f64,
 ) {
     let n = targets.len();
     if n == 0 || attackers.is_empty() || targets_mods.len() != n {
@@ -116,7 +124,8 @@ fn apply_all_attackers(
         }
 
         // P1-5: 用目标防御池一次判定总命中(传入该 target 的 mods)
-        let total_hits = compute_hits(total_attacks, pool.pool_value(tgt, targets_mods[i]));
+        // terrain_penalty 仅对 Breakthrough(攻方挨反击)削池; Defense(守方)不受罚
+        let total_hits = compute_hits(total_attacks, pool.pool_value(tgt, targets_mods[i], terrain_penalty));
 
         // 按攻击点比例把命中分给各攻击者, 各自算伤害(含装甲碾压骰子)
         for (atk_pts, armor_outclass, def_outclass) in per_atk {
@@ -227,26 +236,30 @@ pub fn resolve_all_battles(world: &mut World) {
         };
         let ctx = crate::combat::modifier::CombatContext::build(world, &battle_snapshot);
 
-        // 正向: 攻 → 守(守用 defense 池; P1-5 所有攻击者共享消耗)
-        // 地形惩罚只作用于发起攻击的一方(攻方); 平原=1.0 无影响
+        // 地形惩罚系数(原版: 只罚攻方身份, 不罚守方; 攻守身份整场战斗固定)
         let terrain_penalty = ctx.attacker_terrain_penalty();
+
+        // 正向: 攻 → 守(守用 defense 池)
+        // 攻方 AtkStats 的 attack 乘地形罚(攻方攻击力被削);
+        // 守方 Defense 池不罚(守方享受地形优势), apply_all_attackers 传 1.0
         {
             let atk_stats: Vec<AtkStats> = atks.iter()
                 .map(|d| AtkStats::from(d, ctx.get(d.id), terrain_penalty)).collect();
             let def_mods: Vec<&crate::combat::modifier::ModifierStack> =
                 defs.iter().map(|d| ctx.get(d.id)).collect();
             let mut def_refs: Vec<&mut Division> = defs.iter_mut().collect();
-            apply_all_attackers(&atk_stats, &mut def_refs, CombatPool::Defense, &def_mods);
+            apply_all_attackers(&atk_stats, &mut def_refs, CombatPool::Defense, &def_mods, 1.0);
         }
         // 反向(反击): 守 → 攻(攻用 breakthrough 池)
-        // 反击时原守方发起攻击, 同样受地形惩罚(对齐原版: 谁攻击谁受惩罚)
+        // 守方 AtkStats 的 attack 不乘地形罚(守方是 defender, 地形不罚 defender);
+        // 但攻方挨反击的 breakthrough 池受地形罚(原版: 攻方 attack+breakthrough 都被罚)
         {
             let def_stats: Vec<AtkStats> = defs.iter()
-                .map(|d| AtkStats::from(d, ctx.get(d.id), terrain_penalty)).collect();
+                .map(|d| AtkStats::from(d, ctx.get(d.id), 1.0)).collect();
             let atk_mods: Vec<&crate::combat::modifier::ModifierStack> =
                 atks.iter().map(|d| ctx.get(d.id)).collect();
             let mut atk_refs: Vec<&mut Division> = atks.iter_mut().collect();
-            apply_all_attackers(&def_stats, &mut atk_refs, CombatPool::Breakthrough, &atk_mods);
+            apply_all_attackers(&def_stats, &mut atk_refs, CombatPool::Breakthrough, &atk_mods, terrain_penalty);
         }
 
         // 累积本场 delta 到 deltas(而非覆盖 final_state)
@@ -580,7 +593,7 @@ mod tests {
         let mods_d = [empty]; // 1 个目标 → 1 个 mods
         apply_all_attackers(
             &[AtkStats::from(&atk1, empty, 1.0), AtkStats::from(&atk2, empty, 1.0)],
-            &mut defs_d, CombatPool::Defense, &mods_d,
+            &mut defs_d, CombatPool::Defense, &mods_d, 1.0,
         );
         let drop_double = org_before_double - def_double.org;
 
@@ -591,7 +604,7 @@ mod tests {
         let mut defs_s = [&mut def_single];
         let empty2 = crate::combat::modifier::ModifierStack::empty_static();
         let mods_s = [empty2];
-        apply_all_attackers(&[AtkStats::from(&atk1, empty2, 1.0)], &mut defs_s, CombatPool::Defense, &mods_s);
+        apply_all_attackers(&[AtkStats::from(&atk1, empty2, 1.0)], &mut defs_s, CombatPool::Defense, &mods_s, 1.0);
         let drop_single = org_before_single - def_single.org;
 
         // 双攻击者伤害应显著大于单攻击者(因为防御池被打穿, 更多 40% 命中)
@@ -883,5 +896,85 @@ mod tests {
             "Retreating 期间 location 不应变化, 实际={}",
             d_after.location_province
         );
+    }
+
+    // ===== 地形惩罚修正(2026-06-26): 原版只罚攻方, 反击守方不罚 + 攻方 breakthrough 也罚 =====
+
+    /// 建一场战斗: ATK 攻 DEF 守, 在指定地形省。返回 (world, atk_id, def_id)。
+    /// ATK/DEF 都用 inf() 基础值, 但 ATK 有大 breakthrough(便于观察挨反击)。
+    fn terrain_battle(terrain: &str) -> (World, u64, u64) {
+        let mut w = World::new();
+        add_test_province(&mut w, 1, "X", terrain, vec![]);
+        let mut atk = inf("ATK");
+        atk.breakthrough = 40.0; // 大突破池, 便于观察它被罚
+        atk.soft_attack = 100.0; // 大攻击, 让伤害可见
+        let def = inf("DEF");
+        let atk_id = w.add_division(atk);
+        let def_id = w.add_division(def);
+        w.battles.push(Battle {
+            id: 0, province: 1,
+            attackers: vec![atk_id], defenders: vec![def_id],
+            ..Default::default()
+        });
+        (w, atk_id, def_id)
+    }
+
+    #[test]
+    fn t_mountain_attacker_loses_more_than_plains() {
+        // 山地 vs 平地: 攻方在山地应掉更多 org(attack被罚攻不动 + breakthrough被罚挨反击更疼)
+        // 这是攻方双罚的净效应
+        let (mut w_mtn, atk_mtn, _) = terrain_battle("mountain");
+        let org_mtn_before = w_mtn.divisions.get(&atk_mtn).unwrap().org;
+        resolve_all_battles(&mut w_mtn);
+        let mtn_loss = org_mtn_before - w_mtn.divisions.get(&atk_mtn).unwrap().org;
+
+        let (mut w_pln, atk_pln, _) = terrain_battle("plains");
+        let org_pln_before = w_pln.divisions.get(&atk_pln).unwrap().org;
+        resolve_all_battles(&mut w_pln);
+        let pln_loss = org_pln_before - w_pln.divisions.get(&atk_pln).unwrap().org;
+
+        assert!(mtn_loss > pln_loss,
+            "山地攻方应掉更多 org(双罚): 山地{} 平地{}", mtn_loss, pln_loss);
+    }
+
+    #[test]
+    fn t_defender_attack_not_terrain_penalized_in_counterattack() {
+        // 关键修正验证: 守方反击的 attack 不被地形罚(守方是 defender)。
+        // 对照方法: 守方反击造成的伤害(攻方 org 掉量), 在山地应 ≈ 平地(守方攻击力没变)。
+        // 注: 攻方 breakthrough 山地被罚, 会让攻方挨反击掉更多 → 所以这里只比较"守方攻击是否被削",
+        //     用超大 defense 让攻方正向几乎打不死守方, 隔离观察反击。
+        let make = |terrain: &str| {
+            let (mut w, atk_id, def_id) = terrain_battle(terrain);
+            // 守方: 大 defense(挨正向几乎无损) + 大攻击(反击可见)
+            let d = w.divisions.get_mut(&def_id).unwrap();
+            d.defense = 1000.0;
+            d.soft_attack = 200.0;
+            // 攻方: 大 breakthrough(让攻方挨反击时池子有内容可被罚)
+            let a = w.divisions.get_mut(&atk_id).unwrap();
+            a.breakthrough = 200.0;
+            (w, atk_id)
+        };
+        let (mut w_mtn, atk_mtn) = make("mountain");
+        let mtn_before = w_mtn.divisions.get(&atk_mtn).unwrap().org;
+        resolve_all_battles(&mut w_mtn);
+        let mtn_counter_loss = mtn_before - w_mtn.divisions.get(&atk_mtn).unwrap().org;
+
+        let (mut w_pln, atk_pln) = make("plains");
+        let pln_before = w_pln.divisions.get(&atk_pln).unwrap().org;
+        resolve_all_battles(&mut w_pln);
+        let pln_counter_loss = pln_before - w_pln.divisions.get(&atk_pln).unwrap().org;
+
+        // 旧 bug: 守方反击也乘地形罚 → 山地反击伤害 ≈ 平地×0.4(大降)
+        // 修正后: 守方攻击不罚 → 山地反击 ≈ 平地(守方 attack 没变)
+        // 但攻方 breakthrough 山地被罚 → 攻方在山地挨同样反击掉更多(池子被削)
+        // 故山地 counter_loss >= 平地(攻方更脆), 且不应是平地的 0.4 倍大幅缩水
+        assert!(mtn_counter_loss >= pln_counter_loss,
+            "山地反击守方不罚 + 攻方突破被罚 → 山地攻方掉量应>=平地: 山地{} 平地{}",
+            mtn_counter_loss, pln_counter_loss);
+        // 关键: 守方攻击力没被削, 所以反击伤害不会因地形成倍缩水
+        // (旧 bug 会山地反击 ≈ 平地×0.4, 这里验证不会跌破平地的 60%)
+        assert!(mtn_counter_loss > pln_counter_loss * 0.6,
+            "守方反击不被地形罚 → 反击伤害不会成倍缩水: 山地{} 应 > 平地{}×0.6={}",
+            mtn_counter_loss, pln_counter_loss, pln_counter_loss * 0.6);
     }
 }
