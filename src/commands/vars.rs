@@ -37,6 +37,34 @@ pub fn register(reg: &mut Registry) {
         scope_country_mut(w)?.political_power = n;
         Ok(())
     });
+    reg.register("create_country", |w, p| {
+        let tag = ParamGet::get(p, "tag").and_then(Arg::as_str)
+            .ok_or_else(|| crate::runtime::error::CmdError::BadParam {
+                cmd: "create_country".into(), key: "tag".into(), reason: "缺少 tag".into()
+            })?;
+        let pp = ParamGet::get(p, "political_power").and_then(Arg::as_num).unwrap_or(0.0);
+        let stab = ParamGet::get(p, "stability").and_then(Arg::as_num).unwrap_or(0.5);
+        let ws = ParamGet::get(p, "war_support").and_then(Arg::as_num).unwrap_or(0.5);
+        let cap = ParamGet::get(p, "capital_state").and_then(Arg::as_num).unwrap_or(0.0) as u32;
+        // 已存在则覆盖资源字段(以最后一次为准, 对齐原版 history 加载语义)
+        let c = w.countries.entry(tag.into()).or_default();
+        c.tag = tag.into();
+        c.political_power = pp;
+        c.stability = stab;
+        c.war_support = ws;
+        c.capital_state = cap;
+        Ok(())
+    });
+    reg.register("add_war_support", |w, p| {
+        let n = p.pos(0).and_then(Arg::as_num).ok_or_else(|| bad_param("add_war_support"))?;
+        scope_country_mut(w)?.war_support += n;
+        Ok(())
+    });
+    reg.register("set_war_support", |w, p| {
+        let n = p.pos(0).and_then(Arg::as_num).ok_or_else(|| bad_param("set_war_support"))?;
+        scope_country_mut(w)?.war_support = n;
+        Ok(())
+    });
     reg.register("add_to_variable", |w, p| apply_var_block(w, p, false));
     reg.register("set_variable", |w, p| apply_var_block(w, p, true));
     reg.register("set_flag", |w, p| {
@@ -154,5 +182,53 @@ mod tests {
         let f = reg.get_effect("add_political_power").unwrap();
         let result = f(&mut w, &[("".into(), Arg::Num(50.0))]);
         assert!(result.is_err(), "无国家时 add_political_power 应返回 Err");
+    }
+
+    #[test]
+    fn t_create_country_sets_resources() {
+        let mut reg = Registry::new();
+        register(&mut reg);
+        let mut w = World::new();
+        let f = reg.get_effect("create_country").unwrap();
+        f(&mut w, &[
+            ("tag".into(), Arg::Str("GER".into())),
+            ("political_power".into(), Arg::Num(50.0)),
+            ("stability".into(), Arg::Num(0.7)),
+            ("war_support".into(), Arg::Num(0.3)),
+            ("capital_state".into(), Arg::Num(1.0)),
+        ]).unwrap();
+        let c = w.countries.get("GER").unwrap();
+        assert!((c.political_power - 50.0).abs() < 1e-9);
+        assert!((c.stability - 0.7).abs() < 1e-9);
+        assert!((c.war_support - 0.3).abs() < 1e-9);
+        assert_eq!(c.capital_state, 1);
+        assert_eq!(c.tag, "GER");
+    }
+
+    #[test]
+    fn t_create_country_optional_fields_default() {
+        // 缺省字段用 Default(PP=0, stability/war_support=0.5)
+        let mut reg = Registry::new();
+        register(&mut reg);
+        let mut w = World::new();
+        let f = reg.get_effect("create_country").unwrap();
+        f(&mut w, &[("tag".into(), Arg::Str("X".into()))]).unwrap();
+        let c = w.countries.get("X").unwrap();
+        assert!((c.political_power).abs() < 1e-9);
+        assert!((c.stability - 0.5).abs() < 1e-9);
+        assert!((c.war_support - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn t_add_war_support_targets_country() {
+        let mut reg = Registry::new();
+        register(&mut reg);
+        let mut w = World::new();
+        w.player_tag = "GER".into();
+        w.countries.insert("GER".into(), Default::default());
+        let f = reg.get_effect("add_war_support").unwrap();
+        f(&mut w, &[("".into(), Arg::Num(0.1))]).unwrap();
+        let ws = w.countries.get("GER").unwrap().war_support;
+        assert!((ws - 0.6).abs() < 1e-9, "默认0.5+0.1=0.6");
     }
 }
