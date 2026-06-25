@@ -1,7 +1,7 @@
 # hoi4-clone 项目交接文档
 
 > **用途**: 在新会话中继续开发。读本文件 + 列出的关键文件即可接上。
-> **更新**: 2026-06-24(modifier 层 — 陆战结算统一修正接口 + _factor后缀推导op)
+> **更新**: 2026-06-25(State 概念 — 省份上级容器 + 归属从State派生)
 
 ---
 
@@ -12,7 +12,7 @@
 - **位置**: `G:\projects\hoi4-clone\`
 - **运行**: `cargo test`(测试) / `cargo run --bin hoi4_demo`(CLI) / 浏览器 `http://127.0.0.1:8765`(UI demo)
 - **工具链**: `stable-x86_64-pc-windows-gnu`(rustup override 绑定)
-- **规模**: ~7300 行 Rust + UI + 原版数据, **164 测试**
+- **规模**: ~7600 行 Rust + UI + 原版数据, **168 测试**
 
 ---
 
@@ -29,9 +29,32 @@
 | 状态机重构 | OrderState enum 替代 7 扁平字段 + 4 条规则对齐 + 瞬移根治 | 101 | (阶段) |
 | 多段路径行军 | 自动寻路 + 航点规划 + 支援攻击邻接收敛 + 路径失效应对 | 118 | (阶段) |
 | 数据驱动引擎 | GameData 只读层 + 模块化装备 + 营→师汇总 + 原版数据加载 | 147 | (阶段) |
-| **modifier 层** | **陆战结算统一修正接口(CombatContext快照 + _factor推导op + 三结算点口子)** | **164** | **(本阶段)** |
+| **modifier 层** | **陆战结算统一修正接口(CombatContext快照 + _factor推导op + 三结算点口子)** | **164** | (阶段) |
+| **State 概念** | **省份上级容器(归属从State派生 + 法理vs控制 + state_loader)** | **168** | **(本阶段)** |
 
-### 本阶段核心改动: modifier 层(2026-06-24)
+### 本阶段核心改动: State 概念(2026-06-25)
+
+**核心**: 引入 State 作为 Province 的上级容器, 成为归属/建筑/人力的唯一权威源。Province 归属彻底从 State 派生(删 owner/controller, 加 state_id)。
+
+**数据模型**:
+- `State { id, name, owner, controller, manpower, state_category, cores, buildings, provinces }`
+- `Province { id, state_id, terrain, neighbors }` — 删 owner/controller, 加 state_id
+- State 进 World(可变运行时), 不进 GameData(只读)。双重依据: State 可变(被占领) + 剧本切换需改归属
+
+**归属派生**:
+- `world.province_controller(pid)` / `province_owner(pid)` 从 State 派生
+- `world.set_state_controller(pid, tag)` 改所属 State 的 controller(省份自动跟随)
+- 占领只改 controller, 不改 owner(法理归属 vs 实际控制)
+
+**命令**: create_state(建州) + create_province 改造(删 owner, 加 state 引用)
+
+**Loader**: `src/data/state_loader.rs` 读 history/states/*.txt(裸数字 provinces 列表 + history 子块)
+
+**parser 改进**: 支持 Num 作 key(原版 buildings 块 3838={naval_base=0} 省份 id 作 key)
+
+**测试迁移**: 全量迁移 scope/teleport/battle/integration/diag 的建省脚本(create_state + add_test_province helper); controller 读改 province_controller 派生
+
+**借用技巧**: recovery 遍历 divisions.values_mut 时查 controller, 必须内联字段访问(provinces/states 分离借用), 不能用接 &self 的 province_controller 方法
 
 **核心承诺兑现**: 后续加科技/国策/将领/堑壕/地形/昼夜系统时, **不改 resolve.rs / effective_* / width.rs / recovery.rs**——只往 ModifierStack push 数据。
 

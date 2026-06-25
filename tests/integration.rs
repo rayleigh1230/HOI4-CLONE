@@ -303,3 +303,33 @@ fn t_empty_modifiers_exact_same_as_before() {
     // 满编时 supply_ratio=1.0, 空 modifier multiplier=1.0 → 30.0
     assert!((with_mods - 30.0).abs() < 1e-9, "空栈应精确还原: 30×1.0×1.0=30, 实际 {}", with_mods);
 }
+
+#[test]
+fn t_occupation_changes_state_controller() {
+    use hoi4_clone::runtime::World;
+    use hoi4_clone::runtime::Interpreter;
+    use hoi4_clone::runtime::Registry;
+    use hoi4_clone::commands::register_all;
+    use hoi4_clone::ast::lower::lower_effects;
+    use hoi4_clone::parser::parse;
+
+    let mut w = World::new();
+    let mut reg = Registry::new();
+    register_all(&mut reg);
+    let interp = Interpreter::new(reg);
+    let src = r#"
+        create_state = { id = 1 owner = GER manpower = 500000 state_category = large_city cores = { GER } }
+        create_province = { id = 10 state = 1 terrain = plains neighbors = { 11 } }
+    "#;
+    interp.run(&lower_effects(&parse(src).unwrap()), &mut w);
+
+    // State 存在且含省 10
+    let s = w.states.get(&1).expect("State 1 应存在");
+    assert_eq!(s.owner, "GER");
+    assert!((s.manpower - 500000.0).abs() < 1e-9);
+    assert!(s.provinces.contains(&10), "反向注册: State 应含省 10");
+
+    // 省份归属从 State 派生
+    assert_eq!(w.province_controller(10).unwrap_or(""), "GER");
+    assert_eq!(w.province_owner(10).unwrap_or(""), "GER");
+}
