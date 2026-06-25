@@ -300,4 +300,38 @@ mod tests {
         assert!(!w.data.equipment.is_empty(), "World 应持有非空 GameData");
         assert!(!w.data.sub_units.is_empty(), "应含营定义");
     }
+
+    /// 辅助: 用 Registry + Interpreter 跑脚本建场景(命令测试用)
+    fn run_script(script: &str) {
+        use crate::ast::lower::lower_effects;
+        use crate::runtime::{Interpreter, Registry};
+        thread_local! { static INTERP: std::cell::RefCell<Option<Interpreter>> = std::cell::RefCell::new(None); }
+        // 简化: 每次新建(测试隔离)
+        let mut reg = Registry::new();
+        crate::commands::register_all(&mut reg);
+        crate::combat::commands::register(&mut reg);
+        let b = crate::parser::parse(script).unwrap();
+        let effs = lower_effects(&b);
+        let mut interp = Interpreter::new(reg);
+        // 用一个临时 World 跑(测试只验证命令能跑通 + 字段)
+        let mut w = World::new();
+        interp.run(&effs, &mut w);
+        // 把 w 存到 thread_local 供断言 — 简化: 直接在此断言
+        if script.contains("create_division") {
+            let div = w.divisions.values().next();
+            assert!(div.is_some(), "应建出师");
+            let div = div.unwrap();
+            assert_eq!(div.template_name.as_deref(), Some("Infanterie-Division"),
+                "create_division template= 应记录 template_name");
+        }
+    }
+
+    #[test]
+    fn t_create_division_records_template_name() {
+        // create_division template= 应把模板名记进 Division.template_name
+        let script = "create_state = { id = 1 owner = GER }
+            create_province = { id = 1 state = 1 }
+            create_division = { owner = GER location = 1 template = \"Infanterie-Division\" }";
+        run_script(script);
+    }
 }

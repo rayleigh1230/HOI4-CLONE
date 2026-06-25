@@ -108,6 +108,9 @@ pub struct Division {
     pub order: OrderState,
     /// modifier 汇总(堑壕/计划/经验等师自身修正)
     pub modifiers: crate::combat::modifier::ModifierStack,
+    /// 师所用模板名(None = 旧路径 battalions/手填建的, 无模板引用)
+    /// 换模板(change_template)时更新; edit_template 联动用
+    pub template_name: Option<String>,
 }
 
 impl Division {

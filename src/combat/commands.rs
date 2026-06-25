@@ -17,7 +17,8 @@ fn num_of(a: &Arg) -> Result<f64, CmdError> {
 }
 
 /// 从汇总属性构建 Division(新路径: 数据驱动)
-fn build_division_from_stats(owner: &str, loc: u32, stats: DivisionStats) -> Division {
+/// template: Some(name) = 数据驱动建师(记模板引用); None = 旧路径(无模板)
+fn build_division_from_stats(owner: &str, loc: u32, stats: DivisionStats, template: Option<&str>) -> Division {
     let mut eq_need = std::collections::HashMap::new();
     let mut eq_held = std::collections::HashMap::new();
     for (eq, qty) in &stats.equipment_need {
@@ -46,6 +47,7 @@ fn build_division_from_stats(owner: &str, loc: u32, stats: DivisionStats) -> Div
         manpower_held: stats.manpower_need,
         order: OrderState::Idle,
         modifiers: Default::default(),
+        template_name: template.map(|s| s.to_string()),
     }
 }
 
@@ -175,7 +177,7 @@ pub fn register(reg: &mut Registry) {
             for warn in &warnings {
                 eprintln!("[create_division] ⚠️ {warn}");
             }
-            let d = build_division_from_stats(owner, loc, stats);
+            let d = build_division_from_stats(owner, loc, stats, Some(tmpl_name));
             w.add_division(d);
             return Ok(());
         }
@@ -249,6 +251,7 @@ pub fn register(reg: &mut Registry) {
             manpower_held: mp_total,
             order: OrderState::Idle,
             modifiers: Default::default(),
+            template_name: None,  // 旧路径(battalions/手填)无模板引用
         };
         w.add_division(d);
         Ok(())
