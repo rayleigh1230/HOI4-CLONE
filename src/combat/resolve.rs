@@ -26,12 +26,13 @@ struct AtkStats {
 }
 
 impl AtkStats {
-    fn from(d: &Division, mods: &crate::combat::modifier::ModifierStack) -> Self {
+    fn from(d: &Division, mods: &crate::combat::modifier::ModifierStack, terrain_penalty: f64) -> Self {
         use crate::combat::modifier::ModifierStat;
-        // M4a: 攻击属性按装备充足度缩放(缺装备→攻击下降) × modifier
+        // M4a: 攻击属性按装备充足度缩放(缺装备→攻击下降) × modifier × 地形攻方惩罚
+        // 地形惩罚只作用于攻方(守方享受地形优势, 不乘此系数)
         Self {
-            soft_attack: d.effective_soft_attack(mods),
-            hard_attack: d.effective_hard_attack(mods),
+            soft_attack: d.effective_soft_attack(mods) * terrain_penalty,
+            hard_attack: d.effective_hard_attack(mods) * terrain_penalty,
             armor: d.armor * mods.multiplier(ModifierStat::Armor),
             piercing: d.piercing * mods.multiplier(ModifierStat::Piercing),
         }
@@ -49,8 +50,11 @@ pub fn resolve_hour(
     if attackers.is_empty() || defenders.is_empty() {
         return;
     }
+    // 攻方地形惩罚系数(守方不享受; 平原=1.0 无影响)
+    let terrain_penalty = ctx.attacker_terrain_penalty();
     // 先用 id 收集 mods(不借 defenders 本身, 避免后续可变借用冲突)
-    let atk_stats: Vec<AtkStats> = attackers.iter().map(|d| AtkStats::from(d, ctx.get(d.id))).collect();
+    let atk_stats: Vec<AtkStats> = attackers.iter()
+        .map(|d| AtkStats::from(d, ctx.get(d.id), terrain_penalty)).collect();
     let def_mods: Vec<&crate::combat::modifier::ModifierStack> =
         defenders.iter().map(|d| ctx.get(d.id)).collect();
     // 正向: 攻方 → 守方(守方用 defense 池; P1-5 所有攻击者共享消耗)
@@ -224,16 +228,21 @@ pub fn resolve_all_battles(world: &mut World) {
         let ctx = crate::combat::modifier::CombatContext::build(world, &battle_snapshot);
 
         // 正向: 攻 → 守(守用 defense 池; P1-5 所有攻击者共享消耗)
+        // 地形惩罚只作用于发起攻击的一方(攻方); 平原=1.0 无影响
+        let terrain_penalty = ctx.attacker_terrain_penalty();
         {
-            let atk_stats: Vec<AtkStats> = atks.iter().map(|d| AtkStats::from(d, ctx.get(d.id))).collect();
+            let atk_stats: Vec<AtkStats> = atks.iter()
+                .map(|d| AtkStats::from(d, ctx.get(d.id), terrain_penalty)).collect();
             let def_mods: Vec<&crate::combat::modifier::ModifierStack> =
                 defs.iter().map(|d| ctx.get(d.id)).collect();
             let mut def_refs: Vec<&mut Division> = defs.iter_mut().collect();
             apply_all_attackers(&atk_stats, &mut def_refs, CombatPool::Defense, &def_mods);
         }
         // 反向(反击): 守 → 攻(攻用 breakthrough 池)
+        // 反击时原守方发起攻击, 同样受地形惩罚(对齐原版: 谁攻击谁受惩罚)
         {
-            let def_stats: Vec<AtkStats> = defs.iter().map(|d| AtkStats::from(d, ctx.get(d.id))).collect();
+            let def_stats: Vec<AtkStats> = defs.iter()
+                .map(|d| AtkStats::from(d, ctx.get(d.id), terrain_penalty)).collect();
             let atk_mods: Vec<&crate::combat::modifier::ModifierStack> =
                 atks.iter().map(|d| ctx.get(d.id)).collect();
             let mut atk_refs: Vec<&mut Division> = atks.iter_mut().collect();
@@ -570,7 +579,7 @@ mod tests {
         let empty = crate::combat::modifier::ModifierStack::empty_static();
         let mods_d = [empty]; // 1 个目标 → 1 个 mods
         apply_all_attackers(
-            &[AtkStats::from(&atk1, empty), AtkStats::from(&atk2, empty)],
+            &[AtkStats::from(&atk1, empty, 1.0), AtkStats::from(&atk2, empty, 1.0)],
             &mut defs_d, CombatPool::Defense, &mods_d,
         );
         let drop_double = org_before_double - def_double.org;
@@ -582,7 +591,7 @@ mod tests {
         let mut defs_s = [&mut def_single];
         let empty2 = crate::combat::modifier::ModifierStack::empty_static();
         let mods_s = [empty2];
-        apply_all_attackers(&[AtkStats::from(&atk1, empty2)], &mut defs_s, CombatPool::Defense, &mods_s);
+        apply_all_attackers(&[AtkStats::from(&atk1, empty2, 1.0)], &mut defs_s, CombatPool::Defense, &mods_s);
         let drop_single = org_before_single - def_single.org;
 
         // 双攻击者伤害应显著大于单攻击者(因为防御池被打穿, 更多 40% 命中)

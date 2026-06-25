@@ -135,6 +135,9 @@ use std::collections::HashMap;
 pub struct CombatContext {
     /// 每个参战师的 modifier 汇总(按 division_id 索引)
     stacks: HashMap<u64, ModifierStack>,
+    /// 该战斗省份的攻方地形惩罚系数(0-1, 越低惩罚越重; 守方不受影响)。
+    /// build 时按 battle.province 地形算好, 结算时只乘攻方(AtkStats::from)。
+    attacker_terrain_penalty: f64,
 }
 
 impl CombatContext {
@@ -142,6 +145,10 @@ impl CombatContext {
     /// = 国家modifier + 该师所在省modifier + 师自身modifier
     pub fn build(world: &World, battle: &Battle) -> CombatContext {
         let mut stacks = HashMap::new();
+        // 攻方地形惩罚: 按 battle.province 地形查表(守方不享受此系数)
+        let attacker_terrain_penalty = world.provinces.get(&battle.province)
+            .map(|p| terrain_attacker_penalty(&p.terrain))
+            .unwrap_or(1.0);
         for div_id in battle
             .attackers
             .iter()
@@ -163,7 +170,7 @@ impl CombatContext {
             stack.merge(&d.modifiers);
             stacks.insert(*div_id, stack);
         }
-        CombatContext { stacks }
+        CombatContext { stacks, attacker_terrain_penalty }
     }
 
     /// 取某师的 modifier 汇总(找不到则返回静态空栈引用, 不 panic)
@@ -171,9 +178,14 @@ impl CombatContext {
         self.stacks.get(&div_id).unwrap_or_else(|| ModifierStack::empty_static())
     }
 
+    /// 攻方地形惩罚系数(0-1; 守方不应使用此值)
+    pub fn attacker_terrain_penalty(&self) -> f64 {
+        self.attacker_terrain_penalty
+    }
+
     /// 构造一个空上下文(无任何 modifier, 用于不关心 modifier 的调用点/测试)
     pub fn empty() -> CombatContext {
-        CombatContext { stacks: HashMap::new() }
+        CombatContext { stacks: HashMap::new(), attacker_terrain_penalty: 1.0 }
     }
 }
 
@@ -407,5 +419,37 @@ mod tests {
         assert!((terrain_combat_width("marsh") - 54.0).abs() < 1e-9);
         assert!((terrain_combat_width("urban") - 80.0).abs() < 1e-9, "城市最宽80");
         assert!((terrain_combat_width("unknown_xyz") - 70.0).abs() < 1e-9, "未知回退平原");
+    }
+
+    #[test]
+    fn t_context_attacker_terrain_penalty_from_battle_province() {
+        // CombatContext::build 按 battle.province 地形填攻方惩罚系数
+        let mut w = World::new();
+        w.states.insert(1000, crate::runtime::State {
+            id: 1000, owner: "GER".into(), controller: "GER".into(), ..Default::default()
+        });
+        // 山地省(惩罚 0.40)
+        w.provinces.insert(1, crate::runtime::Province {
+            id: 1, state_id: 1000, terrain: "mountain".into(), neighbors: vec![], ..Default::default()
+        });
+        let battle = Battle {
+            id: 0, province: 1, attackers: vec![], defenders: vec![],
+            reserve_attackers: vec![], reserve_defenders: vec![],
+        };
+        let ctx = CombatContext::build(&w, &battle);
+        assert!((ctx.attacker_terrain_penalty() - 0.40).abs() < 1e-9,
+            "山地战斗攻方惩罚应 0.40, 实际 {}", ctx.attacker_terrain_penalty());
+
+        // 平原省(无惩罚)
+        w.provinces.insert(2, crate::runtime::Province {
+            id: 2, state_id: 1000, terrain: "plains".into(), neighbors: vec![], ..Default::default()
+        });
+        let battle2 = Battle { id: 0, province: 2, attackers: vec![], defenders: vec![],
+            reserve_attackers: vec![], reserve_defenders: vec![] };
+        let ctx2 = CombatContext::build(&w, &battle2);
+        assert!((ctx2.attacker_terrain_penalty() - 1.0).abs() < 1e-9, "平原无惩罚");
+
+        // 空上下文默认无惩罚(不破坏现有调用点)
+        assert!((CombatContext::empty().attacker_terrain_penalty() - 1.0).abs() < 1e-9);
     }
 }
