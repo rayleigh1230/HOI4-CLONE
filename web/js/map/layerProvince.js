@@ -1,39 +1,48 @@
-// 图层1: 政治着色(按 controller 颜色)。
-// 选中高亮已分离到 layerOverlay(spec §6.1: overlay 负责"选中/拖框/tooltip")。
-import { provincePos, TAG_COLORS } from './layout.js';
+// 图层1: 政治着色。多边形描边 controller 色 + 淡填充 + 省号。对齐 spec §3.2。
+// 选中高亮在 layerOverlay, 这里只画基础省。
+import { provincePoly, provinceCentroid, TAG_COLORS } from './layout.js';
 
 let selectedProvince = null;
-
 export function selectProvince(id) { selectedProvince = id; }
 export function getSelected() { return selectedProvince; }
 
-export function draw(ctx, view, { worldToScreen, W, H }) {
+function tracePath(ctx, poly, worldToScreen) {
+  ctx.beginPath();
+  for (let i = 0; i < poly.length; i++) {
+    const s = worldToScreen({ x: poly[i][0], y: poly[i][1] });
+    if (i === 0) ctx.moveTo(s.x, s.y); else ctx.lineTo(s.x, s.y);
+  }
+  ctx.closePath();
+}
+
+export function draw(ctx, view, { worldToScreen, camera, W, H }) {
   const { provinces } = view;
   if (!provinces?.length) return;
 
-  const ids = provinces.map(p => p.id);
-
   for (const p of provinces) {
-    const c = worldToScreen(provincePos(p.id, ids, W, H));
+    const poly = provincePoly(p.id);
+    if (!poly) continue;
     const color = TAG_COLORS[p.controller] || '#666';
 
-    ctx.fillStyle = color + '33';
+    // 淡填充 controller 色(alpha≈0.18, 地形底色透出)
+    tracePath(ctx, poly, worldToScreen);
+    ctx.fillStyle = color + '2e';  // 0x2e ≈ 18% alpha
+    ctx.fill();
+
+    // 描边 controller 色
+    tracePath(ctx, poly, worldToScreen);
     ctx.strokeStyle = color;
     ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.arc(c.x, c.y, 26, 0, Math.PI * 2);
-    ctx.fill();
     ctx.stroke();
 
-    // 省号
-    ctx.fillStyle = '#fff';
-    ctx.font = '12px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('省' + p.id, c.x, c.y + 4);
-
-    // controller tag
-    ctx.fillStyle = color;
-    ctx.font = '9px sans-serif';
-    ctx.fillText(p.controller, c.x, c.y - 18);
+    // 省号(重心)
+    const c = provinceCentroid(p.id);
+    if (c) {
+      const sc = worldToScreen(c);
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 13px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('省' + p.id, sc.x, sc.y + 4);
+    }
   }
 }
