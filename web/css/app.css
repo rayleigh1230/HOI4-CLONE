@@ -8,6 +8,7 @@ html, body {
 #app { width: 100vw; height: 100vh; position: relative; }
 #loading { position: absolute; inset: 0; display: flex; align-items: center;
   justify-content: center; color: #e94560; font-size: 16px; }
+#game { position: absolute; inset: 0; }
 
 /* 地图全屏(canvas 是底层主操作面) */
 #map { position: absolute; inset: 0; width: 100%; height: 100%;
