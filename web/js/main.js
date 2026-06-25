@@ -22,8 +22,12 @@ import { render as renderBottombar } from './ui/bottombar.js';
 import { statbar } from './ui/statbar.js';
 import { h } from './core/el.js';
 import { setProvinceController } from './engine/commands.js';
-import { provincePos } from './map/layout.js';
+import { provinceAt } from './map/layout.js';
 import { selectProvince } from './map/layerProvince.js';
+import * as combatLayer from './map/layerCombat.js';
+import { setFrontPulse } from './map/layerOverlay.js';
+import { setCombatPulse } from './map/layerCombat.js';
+import { open as openPanel } from './core/router.js';
 
 // ===== tick 循环 + store 刷新 =====
 let autoTimer = null;
@@ -36,6 +40,20 @@ export function refresh() {
 export function doTick(h) {
   tick(h);
   refresh();
+}
+
+// 动画循环: 驱动前线脉冲 + 战斗图标闪烁(rAF)。
+// 注: spec §4.4 提"layerUnit 订阅 divisions 脏标记", 但当前 canvas.render 全层重画
+// + 本 rAF 持续触发, 牌子已在每次 render 时刷新(含 org/str 实时值)。
+// 路径级 markDirty 优化在"无 rAF 全量重画"时才有意义, 当前 rAF 已保证牌子实时, 不额外订阅。
+let animPhase = 0;
+function animLoop() {
+  animPhase += 0.08;
+  setFrontPulse(animPhase);
+  setCombatPulse(animPhase);
+  const view = store.state;
+  if (view) canvas.render(view);
+  requestAnimationFrame(animLoop);
 }
 
 export function toggleTime() {
@@ -90,15 +108,20 @@ async function main() {
   input.onHit((wp, sx, sy) => {
     const view = store.state;
     if (!view?.provinces?.length) return false;
-
-    // 找最近省份
     const ids = view.provinces.map(p => p.id);
-    let best = null, bestD = 44;
-    for (const p of view.provinces) {
-      const sp = canvas.worldToScreen(provincePos(p.id, ids, window.innerWidth, window.innerHeight));
-      const d = Math.hypot(sp.x - sx, sp.y - sy);
-      if (d < bestD) { bestD = d; best = p.id; }
+
+    // 命中优先级 1: 战斗图标(点击开战斗面板)。对齐 spec §5.4
+    const cam = canvas.getCamera();
+    const icons = combatLayer.combatIcons(view, (p) => canvas.worldToScreen(p), cam.zoom);
+    for (const ic of icons) {
+      if (Math.hypot(ic.x - sx, ic.y - sy) <= ic.r) {
+        openPanel('交战');
+        return true;
+      }
     }
+
+    // 命中优先级 2: 省份多边形(pointInPolygon)。对齐 spec §3.4
+    const best = provinceAt(wp, ids);
     if (best == null) return false;
 
     // 上帝模式(切控制权)
@@ -178,6 +201,7 @@ declare_war = { attacker = GER defender = FRA }
 
   refresh();
   console.log('[demo] ✓ 引擎+图层跑通, 10省对垒, GER vs FRA, 4 个师(步+甲)');
+  requestAnimationFrame(animLoop);  // 启动动画循环(前线/战斗脉冲)
 }
 
 main();
