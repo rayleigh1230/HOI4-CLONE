@@ -112,6 +112,21 @@ await page.waitForTimeout(400);
 const drawerOpen = await page.locator('#drawer').evaluate(el => el.classList.contains('open'));
 check('点击省份弹抽屉(多边形命中)', drawerOpen, 'drawer.open=' + drawerOpen);
 
+// 6a. 部署师: 设 deployTarget + 点空省, 师数应 +1(回归 deployTemplate owner 参数 bug)
+await page.evaluate(() => window._deployTemplate('Infanterie-Division'));
+await page.waitForTimeout(150);
+const divCountBefore = await page.evaluate(() => window._store.state.divisions.length);
+const deployCam = await page.evaluate(() => {
+  const W = innerWidth, H = innerHeight, m = 20, WW = 1000, WH = 700;
+  const z = Math.min((W - m * 2) / WW, (H - m * 2) / WH);
+  return { z, camX: W / 2 - WW / 2 * z, camY: H / 2 - WH / 2 * z };
+});
+// 省5重心(列5上排, 空省) = (900, 195)
+await page.mouse.click(900 * deployCam.z + deployCam.camX, 195 * deployCam.z + deployCam.camY);
+await page.waitForTimeout(500);
+const divCountAfter = await page.evaluate(() => window._store.state.divisions.length);
+check('部署师到空省(师数+1)', divCountAfter === divCountBefore + 1, `${divCountBefore}→${divCountAfter}`);
+
 // 6b. 战斗图标点击开战斗面板(spec §5.1/§5.4)。demo setup 含 GER 进攻省7, 进 demo 即有战斗。
 const combatInfo = await page.evaluate(() => {
   if (!window._store) return null;

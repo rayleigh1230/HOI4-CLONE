@@ -158,7 +158,7 @@ async function main() {
 
     // 部署模式
     if (deployTarget) {
-      deployTemplate(best, deployTarget);
+      deployTemplate(window._store.state.player || 'GER', best, deployTarget);
       deployTarget = null;
       drawer.close();
       refresh();
