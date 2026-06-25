@@ -279,6 +279,10 @@ pub fn register(reg: &mut Registry) {
         let defender = np(p, "start_battle", "defender")?.as_str()
             .ok_or_else(|| CmdError::RuntimeError("defender 应为字符串".into()))?;
         let prov = num_of(np(p, "start_battle", "province")?)? as u32;
+        // 若两国未处于战争状态, 自动宣战(隐含语义: start_battle = 开战)
+        if !w.are_at_war(attacker, defender) {
+            w.declare_war(attacker, defender);
+        }
         let atks = w.divisions_of(attacker);
         let defs = w.divisions_of(defender);
         if atks.is_empty() || defs.is_empty() {
@@ -383,8 +387,10 @@ pub fn register(reg: &mut Registry) {
             };
         }
         // 第一站有敌军防守 → 开战: 加入或新建战斗(复用 join_as_attacker)
+        // 先快照敌人 tag(避借用冲突: are_at_war 借 w, divisions.values() 借 divisions)
+        let enemy_tags: Vec<String> = w.enemies_of(&owner);
         let first_enemies: Vec<u64> = w.divisions.values()
-            .filter(|d| d.location_province == first && d.owner_tag != owner && !d.is_withdrawing())
+            .filter(|d| d.location_province == first && enemy_tags.contains(&d.owner_tag) && !d.is_withdrawing())
             .map(|d| d.id)
             .collect();
         if !first_enemies.is_empty() {
@@ -508,8 +514,9 @@ pub fn register(reg: &mut Registry) {
                     };
                 }
                 // 第一站有敌军 → 开战
+                let enemy_tags2: Vec<String> = w.enemies_of(&owner);
                 let first_enemies: Vec<u64> = w.divisions.values()
-                    .filter(|d| d.location_province == first && d.owner_tag != owner && !d.is_withdrawing())
+                    .filter(|d| d.location_province == first && enemy_tags2.contains(&d.owner_tag) && !d.is_withdrawing())
                     .map(|d| d.id).collect();
                 if !first_enemies.is_empty() {
                     join_as_attacker(w, div_id, first, &first_enemies);
@@ -548,6 +555,53 @@ pub fn register(reg: &mut Registry) {
             return Err(CmdError::RuntimeError(format!("师 {div_id} 不存在")));
         };
         d.modifiers.push(crate::combat::modifier::Modifier { stat, value, op });
+        Ok(())
+    });
+
+    // 宣战(建立战争, 阵营自动拉入)
+    reg.register("declare_war", |w, p| {
+        let attacker = np(p, "declare_war", "attacker")?.as_str()
+            .ok_or_else(|| CmdError::RuntimeError("attacker 应为字符串".into()))?;
+        let defender = np(p, "declare_war", "defender")?.as_str()
+            .ok_or_else(|| CmdError::RuntimeError("defender 应为字符串".into()))?;
+        w.declare_war(attacker, defender);
+        Ok(())
+    });
+
+    // 白和(无条件停火, 结束两国间所有战争)
+    reg.register("white_peace", |w, p| {
+        let a = np(p, "white_peace", "a")?.as_str()
+            .ok_or_else(|| CmdError::RuntimeError("a 应为字符串".into()))?;
+        let b = np(p, "white_peace", "b")?.as_str()
+            .ok_or_else(|| CmdError::RuntimeError("b 应为字符串".into()))?;
+        w.wars.retain(|war| {
+            !(war.attackers.contains(a) && war.defenders.contains(b)
+                || war.defenders.contains(a) && war.attackers.contains(b))
+        });
+        Ok(())
+    });
+
+    // 创建阵营
+    reg.register("create_faction", |w, p| {
+        let leader = np(p, "create_faction", "leader")?.as_str()
+            .ok_or_else(|| CmdError::RuntimeError("leader 应为字符串".into()))?;
+        let name = np(p, "create_faction", "name")?.as_str()
+            .ok_or_else(|| CmdError::RuntimeError("name 应为字符串".into()))?;
+        let country = w.countries.entry(leader.into()).or_default();
+        country.tag = leader.into();
+        country.faction = Some(name.into());
+        Ok(())
+    });
+
+    // 加入阵营
+    reg.register("join_faction", |w, p| {
+        let tag = np(p, "join_faction", "tag")?.as_str()
+            .ok_or_else(|| CmdError::RuntimeError("tag 应为字符串".into()))?;
+        let name = np(p, "join_faction", "name")?.as_str()
+            .ok_or_else(|| CmdError::RuntimeError("name 应为字符串".into()))?;
+        let country = w.countries.entry(tag.into()).or_default();
+        country.tag = tag.into();
+        country.faction = Some(name.into());
         Ok(())
     });
 

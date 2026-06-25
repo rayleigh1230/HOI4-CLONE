@@ -31,6 +31,8 @@ fn setup_world() -> World {
     w.player_tag = "GER".into();
     w.countries.insert("GER".into(), Default::default());
     w.countries.insert("FRA".into(), Default::default());
+    // GER vs FRA 默认开战(敌人判定改为战争关系)
+    w.declare_war("GER", "FRA");
     // 省份布局: 1=战场, 10=GER后方, 20=FRA后方(让撤退师有处可退)
     add_test_province(&mut w, 1, "FRA", vec![10, 20]);
     add_test_province(&mut w, 10, "GER", vec![1]);
@@ -772,6 +774,7 @@ fn retreating_into_enemy_occupied_province_starts_battle() {
     //   check_engagements → 撤退师变攻方开战
     use hoi4_clone::combat::movement::{advance_movement, check_engagements};
     let mut world = World::new();
+    world.declare_war("GER", "FRA");
     add_test_province(&mut world, 1, "FRA", vec![20]);
     add_test_province(&mut world, 20, "GER", vec![1]);
     // FRA 师在省1, 撤退中, 目标省20, 进度几乎满(1次 advance 即到达)
@@ -820,6 +823,7 @@ fn retreating_to_enemy_province_then_loses_continues_retreat_or_dies() {
     use hoi4_clone::combat::movement::{advance_movement, check_engagements};
     use hoi4_clone::combat::resolve::resolve_all_battles;
     let mut world = World::new();
+    world.declare_war("GER", "FRA");
     add_test_province(&mut world, 1, "FRA", vec![20]);
     add_test_province(&mut world, 20, "GER", vec![1]);
     // FRA 师: org很低(刚被打崩), 撤退到省20(GER驻军). 它会变攻方但打不过.
@@ -1194,6 +1198,7 @@ fn stop_keeps_passive_defense() {
     register_all(&mut reg);
     let interp = Interpreter::new(reg);
     let mut world = World::new();
+    world.declare_war("GER", "FRA");
     world.player_tag = "GER".into();
     world.countries.insert("GER".into(), Default::default());
     world.countries.insert("FRA".into(), Default::default());

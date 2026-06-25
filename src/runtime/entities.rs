@@ -38,6 +38,20 @@ pub struct Country {
     pub manpower_pool: f64,
     /// modifier 汇总(科技/精神/ideas 等国家级修正)
     pub modifiers: crate::combat::modifier::ModifierStack,
+    /// 阵营名(None = 不在阵营; 宣战时同阵营成员自动加入)
+    pub faction: Option<String>,
+}
+
+/// 一场战争(战略级, 多个参与方分攻守两侧)
+/// 注意: 这和 Battle(战术级, 一个省份的交战)不同——一个 War 包含多个 Battle。
+/// 设计见 docs/superpowers/specs/2026-06-25-war-system-design.md
+#[derive(Debug, Clone)]
+pub struct War {
+    pub id: u64,
+    /// 攻方阵营(tag 集合)
+    pub attackers: std::collections::HashSet<String>,
+    /// 守方阵营(tag 集合)
+    pub defenders: std::collections::HashSet<String>,
 }
 
 /// 行动状态机(替代原 7 个扁平字段 retreating/destination/move_progress/attacking/

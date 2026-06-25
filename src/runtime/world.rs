@@ -2,7 +2,7 @@
 use crate::ast::Effect;
 use crate::data::GameData;
 use crate::runtime::date::GameDate;
-use crate::runtime::entities::{Battle, Country, Division, Province, Scope, State};
+use crate::runtime::entities::{Battle, Country, Division, Province, Scope, State, War};
 use crate::runtime::error::CmdError;
 use std::collections::HashMap;
 
@@ -22,6 +22,9 @@ pub struct World {
     pub countries: HashMap<String, Country>,
     pub divisions: HashMap<u64, Division>,
     pub battles: Vec<Battle>,
+    /// 战略级战争状态(外交级; 与 battles 战术级不同)
+    pub wars: Vec<War>,
+    pub next_war_id: u64,
     pub scope_stack: Vec<Scope>,
     pub next_division_id: u64,
     pub next_battle_id: u64,
@@ -47,6 +50,8 @@ impl Default for World {
             countries: Default::default(),
             divisions: Default::default(),
             battles: Vec::new(),
+            wars: Vec::new(),
+            next_war_id: 1,
             scope_stack: vec![Scope::Root],
             next_division_id: 1,
             next_battle_id: 1,
@@ -124,6 +129,57 @@ impl World {
             .filter(|d| d.owner_tag == tag)
             .map(|d| d.id)
             .collect()
+    }
+
+    // ===== 战争状态(War 关系判定) =====
+
+    /// 判定两个 tag 是否处于战争状态(分属某场 war 的对立两侧)
+    pub fn are_at_war(&self, a: &str, b: &str) -> bool {
+        self.wars.iter().any(|w| {
+            (w.attackers.contains(a) && w.defenders.contains(b))
+                || (w.defenders.contains(a) && w.attackers.contains(b))
+        })
+    }
+
+    /// 取某 tag 的所有交战国(在任一 war 的对立侧)
+    pub fn enemies_of(&self, tag: &str) -> Vec<String> {
+        use std::collections::HashSet;
+        let mut enemies = HashSet::new();
+        for w in &self.wars {
+            if w.attackers.contains(tag) {
+                enemies.extend(w.defenders.iter().cloned());
+            } else if w.defenders.contains(tag) {
+                enemies.extend(w.attackers.iter().cloned());
+            }
+        }
+        enemies.into_iter().collect()
+    }
+
+    /// 宣战: 建立一场新战争, 双方阵营成员自动加入
+    pub fn declare_war(&mut self, attacker: &str, defender: &str) -> u64 {
+        use std::collections::HashSet;
+        let id = self.next_war_id;
+        self.next_war_id += 1;
+        let mut atk: HashSet<String> = HashSet::new();
+        atk.insert(attacker.into());
+        atk.extend(self.faction_members(attacker));
+        let mut def: HashSet<String> = HashSet::new();
+        def.insert(defender.into());
+        def.extend(self.faction_members(defender));
+        self.wars.push(War { id, attackers: atk, defenders: def });
+        id
+    }
+
+    /// 取某 tag 的同阵营成员(不含自己)
+    fn faction_members(&self, tag: &str) -> Vec<String> {
+        let faction = self.countries.get(tag).and_then(|c| c.faction.as_ref());
+        match faction {
+            None => vec![],
+            Some(f) => self.countries.iter()
+                .filter(|(t, c)| t.as_str() != tag && c.faction.as_deref() == Some(f.as_str()))
+                .map(|(t, _)| t.clone())
+                .collect(),
+        }
     }
 
     // ===== 日期派生(从 hour 算, 不存状态) =====

@@ -333,3 +333,65 @@ fn t_occupation_changes_state_controller() {
     assert_eq!(w.province_controller(10).unwrap_or(""), "GER");
     assert_eq!(w.province_owner(10).unwrap_or(""), "GER");
 }
+
+#[test]
+fn t_war_system_basic() {
+    // 宣战后两国互为敌人; 无战争时中立
+    use hoi4_clone::runtime::World;
+    let mut w = World::new();
+    // 无战争: 中立
+    assert!(!w.are_at_war("GER", "FRA"));
+    // 宣战
+    w.declare_war("GER", "FRA");
+    assert!(w.are_at_war("GER", "FRA"));
+    // 第三国中立
+    assert!(!w.are_at_war("GER", "SOV"));
+    assert!(!w.are_at_war("FRA", "SOV"));
+    // 白和后停战
+    w.wars.retain(|war| {
+        !(war.attackers.contains("GER") && war.defenders.contains("FRA"))
+    });
+    assert!(!w.are_at_war("GER", "FRA"));
+}
+
+#[test]
+fn t_faction_auto_join_war() {
+    // 阵营成员宣战时自动加入
+    use hoi4_clone::runtime::World;
+    let mut w = World::new();
+    // GER 和 ITA 同阵营 "Axis"
+    w.countries.entry("GER".into()).or_default().faction = Some("Axis".into());
+    w.countries.entry("ITA".into()).or_default().faction = Some("Axis".into());
+    w.countries.entry("FRA".into()).or_default();
+    // GER 宣战 FRA → ITA 自动在攻方
+    w.declare_war("GER", "FRA");
+    assert!(w.are_at_war("GER", "FRA"));
+    assert!(w.are_at_war("ITA", "FRA"), "阵营成员 ITA 应自动与 FRA 交战");
+}
+
+#[test]
+fn t_neutral_countries_dont_fight() {
+    // 未宣战的两军在同省不开打
+    use hoi4_clone::runtime::{World, GameClock, Interpreter, Registry};
+    use hoi4_clone::commands::register_all;
+    let mut w = World::new();
+    let mut reg = Registry::new();
+    register_all(&mut reg);
+    let interp = Interpreter::new(reg);
+    let setup = r#"
+        create_state = { id = 1000 owner = GER }
+        create_state = { id = 2000 owner = FRA }
+        create_province = { id = 1 state = 1000 neighbors = { 2 } }
+        create_province = { id = 2 state = 2000 neighbors = { 1 } }
+        create_division = { owner = GER location = 1 soft_attack = 30 max_strength = 100 }
+        create_division = { owner = FRA location = 2 soft_attack = 30 max_strength = 100 }
+    "#;
+    interp.run(&hoi4_clone::ast::lower::lower_effects(&hoi4_clone::parser::parse(setup).unwrap()), &mut w);
+    // 未宣战: 推进也不开打
+    assert!(!w.are_at_war("GER", "FRA"), "未宣战应为中立");
+    GameClock::advance(&interp, &mut w, 10);
+    assert!(w.battles.is_empty(), "中立国不应开战");
+    // 宣战后才开打
+    w.declare_war("GER", "FRA");
+    assert!(w.are_at_war("GER", "FRA"));
+}

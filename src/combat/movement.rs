@@ -46,8 +46,10 @@ pub fn check_engagements(world: &mut World) {
             continue; // 已在战斗中
         }
         // 查目标地块有无敌军师 — 排除撤退师(撤退师不当守方被重新拉入)
+        // 先快照敌人 tag(避借用冲突: enemies_of 借 world, divisions.values() 借 divisions)
+        let enemy_tags: Vec<String> = world.enemies_of(&owner);
         let enemies: Vec<u64> = world.divisions.values()
-            .filter(|od| od.location_province == dest && od.owner_tag != owner
+            .filter(|od| od.location_province == dest && enemy_tags.contains(&od.owner_tag)
                 && !od.is_annihilated() && !od.is_withdrawing())
             .map(|od| od.id)
             .collect();
@@ -184,8 +186,9 @@ pub fn advance_movement(world: &mut World) {
         for (id, dest, owner, was_retreat, remaining) in arrived {
             let dest_has_battle = world.battles.iter().any(|b| b.province == dest);
             // 无正在进行的战斗 → 查目标省有无敌军部队(规则1: 同省异国师立刻开战)
+            let enemy_tags_a: Vec<String> = world.enemies_of(&owner);
             let has_enemies = world.divisions.values()
-                .any(|od| od.location_province == dest && od.owner_tag != owner
+                .any(|od| od.location_province == dest && enemy_tags_a.contains(&od.owner_tag)
                     && !od.is_annihilated());
             if was_retreat {
                 // Retreating 组到达(独立判定, 规则见 order-state-semantics.md):
@@ -287,8 +290,9 @@ pub fn advance_movement(world: &mut World) {
             continue; // 战斗进行中, 继续等
         }
         // 无正在进行的战斗 → 查目标省有无敌军部队
+        let enemy_tags_p: Vec<String> = world.enemies_of(&owner);
         let has_enemies = world.divisions.values()
-            .any(|od| od.location_province == dest && od.owner_tag != owner
+            .any(|od| od.location_province == dest && enemy_tags_p.contains(&od.owner_tag)
                 && !od.is_annihilated());
         if has_enemies {
             continue; // 有敌军但战斗未开(等 check_engagements 下tick开战), 不占领
@@ -467,6 +471,7 @@ mod tests {
     #[test]
     fn t_p2_division_defends_own_province_while_attacking_elsewhere() {
         let mut w = World::new();
+        w.declare_war("GER", "FRA");  // 敌人判定改为战争关系, 需显式宣战
         // 师A: GER, 归属省1, 正进攻省2
         let mut a = live_div();
         a.owner_tag = "GER".into();
@@ -499,6 +504,7 @@ mod tests {
     #[test]
     fn t_p2_original_attack_uninterrupted() {
         let mut w = World::new();
+        w.declare_war("GER", "FRA");  // 敌人判定改为战争关系, 需显式宣战
         let mut a = live_div();
         a.owner_tag = "GER".into();
         a.location_province = 1;
@@ -577,6 +583,7 @@ mod tests {
         // 决策5(Pending 路径): 师到省2 遇敌进 Pending(remaining=[3]),
         // 战斗结束(敌人消失)→ 占领省2 → 续走省3
         let mut w = chain_1_2_3_world();
+        w.declare_war("GER", "FRA");  // 敌人判定改为战争关系, 需显式宣战
         // 省3 也设 FRA, 省2 放一个 FRA 师(org 归零会被清出战斗)
         w.set_state_controller(3, "FRA");
         let enemy = Division {
