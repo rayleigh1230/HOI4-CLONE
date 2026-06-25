@@ -86,3 +86,17 @@ button.secondary:hover { background: #1a4a80; }
 #log:empty { display: none; }
 #log { font-size: 11px; color: #7ec8e3; font-family: monospace; line-height: 1.5;
   background: rgba(10,10,26,0.7); border-radius: 4px; padding: 4px 6px; }
+
+/* 战斗详情面板(combatPanel, landcombatview 风格) */
+.combat-cols { display: flex; gap: 8px; }
+.combat-side { flex: 1; }
+.side-hd { font-size: 11px; color: #7ec8e3; font-weight: bold; margin-bottom: 4px;
+  padding-bottom: 3px; border-bottom: 1px solid #0f3460; }
+.combat-div { display: flex; align-items: center; gap: 6px; background: #0a0a1a;
+  border-radius: 3px; padding: 4px 6px; margin: 3px 0; }
+.combat-div .sym { font-size: 16px; width: 18px; text-align: center; }
+.combat-div.ger .sym { color: #e94560; }
+.combat-div.fra .sym { color: #16c79a; }
+.combat-div .bars { flex: 1; }
+.combat-div .bars .mini-bar { margin: 1px 0; }
+.combat-div .stats { font-size: 10px; color: #9ab; font-family: monospace; white-space: nowrap; }
