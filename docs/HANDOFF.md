@@ -36,6 +36,36 @@
 | **战争状态** | War关系(are_at_war判定) + 阵营自动拉入 + 敌人判定改造 | 180 |
 | **demo 彻底改造** | 地图全屏+浮层/绑定式数据流/触屏/模板引用/ change_template/ 6图层Canvas / ES Module 四层架构 | 122+UI |
 | **demo 改造后修复+验证** | 见下方"demo 改造后修复"小节(9 项修复 + Playwright 真机验证 13/13) | 122+UI |
+| **地图视觉&战斗可视化改造** | 见下方"地图视觉改造"小节(13 Task + Playwright 17/17) | 122+UI |
+
+### 地图视觉&战斗可视化改造(2026-06-25, 对齐 map-visual-overhaul spec)
+
+把地图从"抽象圆点+全黑底"改成"多边形拼图+地形底色+完整 NATO 牌+战斗小圆+详情面板"。头脑风暴 4 节确认 → spec → 13 Task 实现, Playwright 17/17 验证。每项标注 spec 条目, 便于追溯。
+
+| Task | 内容 | 对齐 spec |
+|---|---|---|
+| 1 | get_state 序列化补 soft/hard/defense/breakthrough/armor/piercing/combat_width(战斗面板用) | §6.1 |
+| 2 | layout.js 重写: 固定世界坐标系(1000×700) + 手写 10 省多边形(5列×2排网格无缝) + 地形 + pointInPolygon | §2 |
+| 3 | canvas.js 相机 fitToWorld(世界居中可见) + resize 同步 | §2.4 |
+| 4 | layerTerrain: 多边形填充地形色 + offscreen 噪点纹理(替代全黑底) | §3.1 |
+| 5 | layerProvince: 多边形描边 controller 色 + 淡填充(地形底色透出) + 省号 | §3.2 |
+| 6 | layerOverlay: 选中沿多边形金色描边 + 前线脉冲(controller 不同的相邻省) | §3.3 |
+| 7 | layerOrder: 改用 provinceCentroid 世界坐标(适配新布局) | §5.2 |
+| 8 | layerUnit: 完整 NATO 76×24 牌(兵种+org/str竖条+数量+国旗色边框+牌堆合并+战斗描红) | §4 |
+| 9 | layerCombat: 带进度数字小圆(可点击) + combatIcons 导出; rAF 动画循环(前线/战斗脉冲) | §5.1 |
+| 10 | combatPanel: 升级 landcombatview 风格(攻守双方+师soft/hard/defense+进度+宽度+预备队) | §5.3 |
+| 11 | main.js: 命中改 pointInPolygon + 战斗图标点击优先开战斗面板 + rAF | §3.4/§5.4 |
+| 12 | demo setup 加 GER 进攻省7(战斗可视化内容) + 扩展 web_demo 17/17 | §5 |
+| 13 | HANDOFF 更新 + 最终回归(122 测试/wasm 0 警告/17 验证) | — |
+
+**关键决策**(头脑风暴确认): 省份=自定义多边形(非真实地图, 不突破 spec 非目标); 多师=牌堆合并(对齐原版 unit_counter); 战斗图标=带进度数字小圆(对齐 land_combat_mapicon, 进军箭头归 layerOrder); 战斗详情=点击图标弹独立面板(landcombatview 风格); 命中优先级=战斗图标 > 省份多边形。
+
+**验证**: `tests/web_demo.mjs` 17 项全过 — loading/game/无错误/canvas非黑(16000点)/get_state字段/顶栏/底栏/多边形命中弹抽屉/战斗图标点击开面板/地形多边形渲染(44001绿色调采样)/战斗属性字段/tick。截图 `tests/demo-final.png`。
+
+**踩坑记录**:
+- 战斗触发窗口短: `check_engagements` 只对 Moving/Pending 师 + 目标省有敌军开战; 师到达后转 Idle 不再开战。原 demo 无进攻命令故无战斗(非 bug)。加进攻命令后战斗正常触发, layerCombat 小圆/面板有内容。
+- provinceCentroid 返回 `{x,y}` 对象(非数组), 各图层消费用 `.x/.y`。
+- rAF 全量重画下, spec §4.4 的"layerUnit 订阅 divisions 脏标记"优化冗余(rAF 已保证牌子实时), 不额外订阅(避免过度设计)。
 
 ### demo 改造后修复(2026-06-25, 对齐 demo-overhaul spec/plan)
 
