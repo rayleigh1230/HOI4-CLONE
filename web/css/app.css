@@ -126,3 +126,16 @@ button.secondary:hover { background: #1a4a80; }
 .combat-div .bars { flex: 1; }
 .combat-div .bars .mini-bar { margin: 1px 0; }
 .combat-div .stats { font-size: 10px; color: #9ab; font-family: monospace; white-space: nowrap; }
+
+/* 外交面板 */
+.diplo-section { margin-bottom: 12px; }
+.diplo-hd { color: #e94560; font-weight: bold; font-size: 13px; margin-bottom: 6px;
+  border-bottom: 1px solid #0f3460; padding-bottom: 4px; }
+.diplo-empty { color: #666; font-size: 12px; padding: 4px 0; }
+.diplo-war { display: flex; align-items: center; gap: 6px; background: #0a0a1a;
+  padding: 6px 8px; border-radius: 4px; margin: 4px 0; font-size: 13px; }
+.diplo-war .atk { color: #e94560; font-weight: bold; }
+.diplo-war .def { color: #16c79a; font-weight: bold; }
+.diplo-row { display: flex; align-items: center; padding: 3px 0; font-size: 12px; }
+.diplo-op-row { display: flex; align-items: center; gap: 6px; margin: 6px 0; }
+.diplo-op-row select, .diplo-op-row input { flex: 0 0 auto; min-height: 36px; font-size: 12px; }

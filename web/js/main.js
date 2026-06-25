@@ -105,7 +105,7 @@ async function main() {
   let deployTarget = null;
 
   // 部署全局入口(给 deployPanel 用)
-  window._deployTemplate = (tmpl) => { deployTarget = tmpl; };
+  window._deployTemplate = (owner, tmpl) => { deployTarget = { owner, tmpl }; };
 
   // ESC: 关闭所有浮层(面板/抽屉/命令菜单/取消选师)。对齐用户反馈问题4。
   document.addEventListener('keydown', (e) => {
@@ -158,7 +158,7 @@ async function main() {
 
     // 部署模式
     if (deployTarget) {
-      deployTemplate(window._store.state.player || 'GER', best, deployTarget);
+      deployTemplate(deployTarget.owner, best, deployTarget.tmpl);
       deployTarget = null;
       drawer.close();
       refresh();

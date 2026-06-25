@@ -1,7 +1,10 @@
-// 部署面板: 选模板→点省建师(数据驱动 template 路径)
+// 部署面板: 选国家 + 选模板 → 点省建师(数据驱动 template 路径)。
+// 对齐用户反馈: 部署需区分国家(可部署 GER 或 FRA 师)。
 import { h, clear } from '../core/el.js';
 import { getTemplates } from '../engine/state.js';
 import { register } from '../core/router.js';
+
+const NATIONS = ['GER', 'FRA'];
 
 export function init() {
   register('部署', {
@@ -9,20 +12,23 @@ export function init() {
       const host = document.getElementById('panel-host');
       clear(host);
       const templates = getTemplates();
-      const sel = h('select', {});
-      for (const t of templates) {
-        sel.append(h('option', { value: t, text: t }));
-      }
+      // 国家选择
+      const ownerSel = h('select', {});
+      for (const t of NATIONS) ownerSel.append(h('option', { value: t, text: t }));
+      // 模板选择
+      const tmplSel = h('select', {});
+      for (const t of templates) tmplSel.append(h('option', { value: t, text: t }));
       const status = h('div', { style: { color: '#7ec8e3', fontSize: '12px', marginTop: '8px' } });
       host.append(
         h('h3', { text: '部署师' }),
-        h('label', { text: '模板' }),
-        sel,
+        h('label', { text: '国家' }), ownerSel,
+        h('label', { text: '模板' }), tmplSel,
         h('button', {
           onclick() {
-            const tmpl = sel.value;
-            status.textContent = `已选模板「${tmpl}」, 点地图省份部署`;
-            window._deployTemplate(tmpl);
+            const owner = ownerSel.value;
+            const tmpl = tmplSel.value;
+            status.textContent = `已选 ${owner} ${tmpl}, 点地图省份部署`;
+            window._deployTemplate(owner, tmpl);  // 传 owner + tmpl
           },
           text: '选省部署',
         }),

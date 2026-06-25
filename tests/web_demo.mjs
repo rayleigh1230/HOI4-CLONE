@@ -112,8 +112,8 @@ await page.waitForTimeout(400);
 const drawerOpen = await page.locator('#drawer').evaluate(el => el.classList.contains('open'));
 check('点击省份弹抽屉(多边形命中)', drawerOpen, 'drawer.open=' + drawerOpen);
 
-// 6a. 部署师: 设 deployTarget + 点空省, 师数应 +1(回归 deployTemplate owner 参数 bug)
-await page.evaluate(() => window._deployTemplate('Infanterie-Division'));
+// 6a. 部署师: 设 deployTarget(owner+tmpl) + 点空省, 师数应 +1
+await page.evaluate(() => window._deployTemplate('GER', 'Infanterie-Division'));
 await page.waitForTimeout(150);
 const divCountBefore = await page.evaluate(() => window._store.state.divisions.length);
 const deployCam = await page.evaluate(() => {
