@@ -407,6 +407,30 @@ mod tests {
         assert!((b.political_power - 50.0).abs() < 1e-9, "两国 PP 应独立");
     }
 
+    #[test]
+    fn t_trigger_compare_reads_country_resource() {
+        // trigger political_power >= 150 应读当前国家(player_tag)的 effective PP
+        use crate::ast::lower::lower_effects;
+        use crate::commands::register_all;
+        use crate::runtime::{Interpreter, Registry};
+        let mut reg = Registry::new();
+        register_all(&mut reg);
+        crate::combat::commands::register(&mut reg);
+        let interp = Interpreter::new(reg);
+        let mut w = World::new();
+        w.player_tag = "GER".into();
+        // GER 有 200 PP
+        w.countries.insert("GER".into(), crate::runtime::Country {
+            political_power: 200.0, ..Default::default()
+        });
+        // 脚本: if political_power >= 150 then set_flag done
+        let src = "if = { limit = { political_power >= 150 } set_flag = done }";
+        let b = crate::parser::parse(src).unwrap();
+        let effs = lower_effects(&b);
+        interp.run(&effs, &mut w);
+        assert!(w.has_flag("done"), "GER PP=200 >= 150 应触发, flag=done");
+    }
+
     /// 辅助: 用 Registry + Interpreter 跑脚本, 返回 World(命令测试用)
     fn run_script_world(scripts: &[&str]) -> World {
         use crate::ast::lower::lower_effects;
