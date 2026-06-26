@@ -201,7 +201,13 @@ pub fn variant_chassis(variant: &str) -> &str {
 
 **equipment_data.rs 硬编码表改造**:
 - 每条装备补 `variant_of: &str` 字段(如 `infantry_equipment` → `infantry_equipment_1`)
-- 资源字段补: infantry steel=2, artillery tungsten=1 steel=2, light_tank steel=2 rubber=1 等(对齐原版)
+- 资源字段补(对齐原版 1936 chassis 数据, NSB chassis+modules 系统 — 资源主要来自 modules, chassis 本身资源很少):
+  - infantry steel=2(来自 infantry.txt)
+  - artillery tungsten=1 steel=2(来自 artillery.txt)
+  - light_tank_chassis_2(1936): steel=1
+  - medium_tank_chassis_1(1936): 无 resources
+  - heavy_tank_chassis_1(1934/1936): 无 resources
+  - 注: 完整坦克装备(含 modules)的资源需求由 modules 累加, 当前硬编码表只反映 chassis 本身
 
 ---
 

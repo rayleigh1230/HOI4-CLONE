@@ -619,9 +619,10 @@ pub struct EquipmentDef {
 修改 `EQUIPMENT` 数组(`equipment_data.rs:24-80`)。原版对齐:
 - infantry_equipment: steel=2
 - artillery: tungsten=1, steel=2
-- light_tank: steel=2, rubber=1
-- medium_tank: steel=3, rubber=1
-- heavy_tank: steel=4, chromium=1
+- light_tank: steel=1(light_tank_chassis_2, 1936)
+- medium_tank: 无 resources(medium_tank_chassis_1, 1936)
+- heavy_tank: 无 resources(heavy_tank_chassis_1, 1934/1936)
+- 注: NSB chassis+modules 系统下资源主要来自 modules, chassis 本身资源很少; 当前硬编码表只反映 chassis 本身
 
 ```rust
 pub static EQUIPMENT: &[EquipmentDef] = &[
@@ -640,17 +641,17 @@ pub static EQUIPMENT: &[EquipmentDef] = &[
     EquipmentDef {
         name: "light_tank",
         // ...
-        resources: &[("steel", 2.0), ("rubber", 1.0)],
+        resources: &[("steel", 1.0)],  // light_tank_chassis_2(1936)
     },
     EquipmentDef {
         name: "medium_tank",
         // ...
-        resources: &[("steel", 3.0), ("rubber", 1.0)],
+        resources: &[],  // medium_tank_chassis_1(1936) 无 resources 块
     },
     EquipmentDef {
         name: "heavy_tank",
         // ...
-        resources: &[("steel", 4.0), ("chromium", 1.0)],
+        resources: &[],  // heavy_tank_chassis_1(1934/1936) 无 resources 块
     },
 ];
 ```

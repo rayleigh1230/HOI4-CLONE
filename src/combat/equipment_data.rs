@@ -58,7 +58,7 @@ pub static EQUIPMENT: &[EquipmentDef] = &[
         piercing: 14.0,
         hardness: 0.9,
         build_cost_ic: 2.7,
-        resources: &[("steel", 2.0), ("rubber", 1.0)],
+        resources: &[("steel", 1.0)],
     },
     EquipmentDef {
         name: "medium_tank",
@@ -70,7 +70,8 @@ pub static EQUIPMENT: &[EquipmentDef] = &[
         piercing: 61.0,
         hardness: 0.9,
         build_cost_ic: 11.0,
-        resources: &[("steel", 3.0), ("rubber", 1.0)],
+        // medium_tank_chassis_1(1936) 原版无 resources 块; 资源来自 modules, 此处只反映 chassis 本身
+        resources: &[],
     },
     EquipmentDef {
         name: "heavy_tank",
@@ -82,7 +83,8 @@ pub static EQUIPMENT: &[EquipmentDef] = &[
         piercing: 100.0,
         hardness: 0.95,
         build_cost_ic: 15.0,
-        resources: &[("steel", 4.0), ("chromium", 1.0)],
+        // heavy_tank_chassis_1(1934/1936) 原版无 resources 块; 资源来自 modules, 此处只反映 chassis 本身
+        resources: &[],
     },
 ];
 
