@@ -71,3 +71,128 @@ fn t_chassis_derived_from_variant() {
     assert_eq!(line.chassis, "light_tank_chassis");
     assert_eq!(line.variant, "light_tank_chassis_1");
 }
+
+// === Phase 3 测试: 资源惩罚 + change_line_variant ===
+use super::production::{change_line_variant, resource_penalty};
+use crate::data::equipment::EquipmentDef as GameEq;
+use crate::data::EquipStats;
+use std::collections::HashMap;
+
+fn mock_equip(name: &str, bc: f64, resources: Vec<(&str, f64)>) -> GameEq {
+    GameEq {
+        name: name.into(),
+        chassis: crate::economy::variant_chassis(name).to_string(),
+        year: 1936,
+        equip_type: "infantry".into(),
+        stats: EquipStats {
+            build_cost_ic: bc,
+            ..Default::default()
+        },
+        resources: resources.into_iter().map(|(k, v)| (k.to_string(), v)).collect(),
+    }
+}
+
+#[test]
+fn t_no_penalty_when_resources_sufficient() {
+    let mut line = ProductionLine::new(0, "infantry_equipment_1".into());
+    line.set_active(5);
+    let eq = mock_equip("infantry_equipment_1", 0.43, vec![("steel", 2.0)]);
+    let mut res = HashMap::new();
+    res.insert("steel".into(), 100.0);
+    let mult = resource_penalty(&line, &eq, &res);
+    assert!(
+        (mult - 1.0).abs() < 1e-9,
+        "资源充足应无惩罚, mult={}",
+        mult
+    );
+}
+
+#[test]
+fn t_steel_shortage_5pct_per_unit() {
+    let mut line = ProductionLine::new(0, "infantry_equipment_1".into());
+    line.set_active(10); // 10 工厂 × 钢 2 = 需 20 钢
+    let eq = mock_equip("infantry_equipment_1", 0.43, vec![("steel", 2.0)]);
+    let mut res = HashMap::new();
+    res.insert("steel".into(), 18.0); // 缺 2 → -10%
+    let mult = resource_penalty(&line, &eq, &res);
+    assert!(
+        (mult - 0.90).abs() < 1e-9,
+        "缺 2 钢应 -10%, mult={}",
+        mult
+    );
+}
+
+#[test]
+fn t_multiple_resource_penalties_stack() {
+    let mut line = ProductionLine::new(0, "artillery_1".into());
+    line.set_active(3); // 钨 3×1=3, 钢 3×2=6
+    let eq = mock_equip(
+        "artillery_1",
+        3.5,
+        vec![("tungsten", 1.0), ("steel", 2.0)],
+    );
+    let mut res = HashMap::new();
+    res.insert("tungsten".into(), 2.0); // 缺 1 → -5%
+    res.insert("steel".into(), 5.0); // 缺 1 → -5%
+    let mult = resource_penalty(&line, &eq, &res);
+    assert!((mult - 0.90).abs() < 1e-9, "总 -10%, mult={}", mult);
+}
+
+#[test]
+fn t_zero_output_when_full_shortage() {
+    let mut line = ProductionLine::new(0, "artillery_1".into());
+    line.set_active(10);
+    let eq = mock_equip("artillery_1", 3.5, vec![("tungsten", 1.0)]);
+    let res = HashMap::new(); // 0 钨
+    let mult = resource_penalty(&line, &eq, &res);
+    // 缺 10 → -50% → 实际 mult = 0.5(只有 tungsten 短缺)
+    assert!(
+        (mult - 0.50).abs() < 1e-9,
+        "缺 10 钨应 -50%, mult={}",
+        mult
+    );
+}
+
+#[test]
+fn t_variant_change_keeps_90pct() {
+    let mut line = ProductionLine::new(0, "infantry_equipment_1".into());
+    line.set_active(3);
+    line.slots[0].efficiency = 0.30;
+    line.slots[1].efficiency = 0.30;
+    line.slots[2].efficiency = 0.30;
+    change_line_variant(&mut line, "infantry_equipment_2");
+    assert!(
+        (line.slots[0].efficiency - 0.27).abs() < 1e-9,
+        "应保留 90%: 0.30×0.9=0.27"
+    );
+    assert_eq!(line.variant, "infantry_equipment_2");
+    assert_eq!(line.chassis, "infantry_equipment");
+}
+
+#[test]
+fn t_chassis_change_resets_to_start() {
+    let mut line = ProductionLine::new(0, "infantry_equipment_1".into());
+    line.set_active(3);
+    line.slots[0].efficiency = 0.40;
+    change_line_variant(&mut line, "artillery_1");
+    // 不同 chassis → 重置 active 槽到 EFFICIENCY_START
+    assert!(
+        (line.slots[0].efficiency - EFFICIENCY_START).abs() < 1e-9,
+        "active 槽应重置到 START({}), 实际 {}",
+        EFFICIENCY_START,
+        line.slots[0].efficiency
+    );
+    assert_eq!(line.chassis, "artillery");
+}
+
+#[test]
+fn t_change_to_same_variant_noop() {
+    let mut line = ProductionLine::new(0, "infantry_equipment_1".into());
+    line.set_active(2);
+    line.slots[0].efficiency = 0.40;
+    change_line_variant(&mut line, "infantry_equipment_1");
+    assert!(
+        (line.slots[0].efficiency - 0.40).abs() < 1e-9,
+        "同 variant 不应变"
+    );
+}
