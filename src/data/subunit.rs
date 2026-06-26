@@ -199,6 +199,7 @@ mod tests {
                 piercing: 1.0,
                 ..Default::default()
             },
+            resources: Vec::new(),
         }
     }
 

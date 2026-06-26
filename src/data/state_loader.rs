@@ -78,6 +78,16 @@ fn parse_state_block(b: &Block) -> Option<State> {
         })
         .unwrap_or_default();
 
+    // resources 在 state 级别(不在 history 内)
+    let resources: HashMap<String, f64> = find_block(b, "resources")
+        .map(|rb| {
+            rb.fields
+                .iter()
+                .filter_map(|f| f.value.as_scalar_num().map(|v| (f.key.clone(), v)))
+                .collect()
+        })
+        .unwrap_or_default();
+
     let provinces = parse_provinces_list(b);
 
     Some(State {
@@ -89,7 +99,7 @@ fn parse_state_block(b: &Block) -> Option<State> {
         state_category: category,
         cores,
         buildings,
-        resources: Default::default(),  // 下个 phase 从 `resources = { steel = N }` 块加载
+        resources,
         provinces,
     })
 }
@@ -159,5 +169,39 @@ mod tests {
         let s = states.iter().find(|s| s.id == 1).expect("应有 state id=1");
         assert_eq!(s.owner, "FRA");
         assert!(!s.provinces.is_empty(), "科西嘉应含省份");
+    }
+
+    #[test]
+    fn t_load_state_with_resources() {
+        let src = r#"state={
+            id=42
+            name="STATE_42"
+            manpower = 100000
+            state_category = city
+            history={ owner = GER }
+            resources = { steel = 16 chromium = 3 }
+            provinces={ 100 101 }
+        }"#;
+        let states = load_states(src);
+        let s = &states[0];
+        assert!(
+            (s.resources.get("steel").copied().unwrap_or(0.0) - 16.0).abs() < 1e-9,
+            "steel 应 16"
+        );
+        assert!(
+            (s.resources.get("chromium").copied().unwrap_or(0.0) - 3.0).abs() < 1e-9,
+            "chromium 应 3"
+        );
+    }
+
+    #[test]
+    fn t_load_state_without_resources_defaults_empty() {
+        let src = r#"state={
+            id=43 name="X" state_category=town
+            history={ owner = GER }
+            provinces={ 200 }
+        }"#;
+        let states = load_states(src);
+        assert!(states[0].resources.is_empty(), "无 resources 块应默认空");
     }
 }

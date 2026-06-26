@@ -247,6 +247,7 @@ mod tests {
                     piercing: 1.0,
                     ..Default::default()
                 },
+                resources: Vec::new(),
             },
         );
         d.sub_units.insert(
@@ -308,6 +309,7 @@ mod tests {
                     hardness: 0.9,
                     ..Default::default()
                 },
+                resources: Vec::new(),
             },
         );
         data.sub_units.insert(

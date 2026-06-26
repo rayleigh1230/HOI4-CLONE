@@ -80,6 +80,8 @@ pub struct EquipmentDef {
     pub year: u32,
     pub equip_type: String,        // "armor" / "infantry" / "artillery"
     pub stats: EquipStats,         // 最终属性(加载时按公式算好缓存)
+    /// 生产所需资源(原版 `resources = { steel = 2 }`), 如 [("steel", 2.0)]
+    pub resources: Vec<(String, f64)>,
 }
 
 /// 给定底盘基础 + 模块选择, 按公式算最终装备属性(spec §3.3)
@@ -177,6 +179,33 @@ mod tests {
         ];
         let s = compute_equipment_stats(&base, &modules);
         assert!((s.armor - 14.3).abs() < 1e-9, "装甲汇总应 14.3, 实际 {}", s.armor);
+    }
+
+    #[test]
+    fn t_extract_resources_from_block() {
+        // 模拟 infantry_equipment: resources = { steel = 2 }
+        let src = "type = infantry\nresources = { steel = 2 }\nbuild_cost_ic = 0.43";
+        let b = parse(src).unwrap();
+        // 找 resources 块
+        let res_block = b
+            .fields
+            .iter()
+            .find(|f| f.key == "resources")
+            .and_then(|f| {
+                if let crate::parser::Value::Block(bb) = &f.value {
+                    Some(bb)
+                } else {
+                    None
+                }
+            })
+            .expect("应有 resources 块");
+        let steel = res_block
+            .fields
+            .iter()
+            .find(|f| f.key == "steel")
+            .and_then(|f| f.value.as_scalar_num())
+            .expect("应有 steel 值");
+        assert!((steel - 2.0).abs() < 1e-9);
     }
 
     #[test]

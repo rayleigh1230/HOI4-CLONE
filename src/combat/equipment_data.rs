@@ -13,6 +13,8 @@ pub struct EquipmentDef {
     pub piercing: f64,
     pub hardness: f64,
     pub build_cost_ic: f64,
+    /// 生产所需资源(原版 `resources = { steel = 2 }`), 如 &[("steel", 2.0)]
+    pub resources: &'static [(&'static str, f64)],
 }
 
 /// 1936 年装备(实证自原版文件)
@@ -32,6 +34,7 @@ pub static EQUIPMENT: &[EquipmentDef] = &[
         piercing: 1.0,
         hardness: 0.0,
         build_cost_ic: 0.43,
+        resources: &[("steel", 2.0)],
     },
     EquipmentDef {
         name: "artillery",
@@ -43,6 +46,7 @@ pub static EQUIPMENT: &[EquipmentDef] = &[
         piercing: 8.0,
         hardness: 0.0,
         build_cost_ic: 3.5,
+        resources: &[("tungsten", 1.0), ("steel", 2.0)],
     },
     EquipmentDef {
         name: "light_tank",
@@ -54,6 +58,7 @@ pub static EQUIPMENT: &[EquipmentDef] = &[
         piercing: 14.0,
         hardness: 0.9,
         build_cost_ic: 2.7,
+        resources: &[("steel", 2.0), ("rubber", 1.0)],
     },
     EquipmentDef {
         name: "medium_tank",
@@ -65,6 +70,7 @@ pub static EQUIPMENT: &[EquipmentDef] = &[
         piercing: 61.0,
         hardness: 0.9,
         build_cost_ic: 11.0,
+        resources: &[("steel", 3.0), ("rubber", 1.0)],
     },
     EquipmentDef {
         name: "heavy_tank",
@@ -76,6 +82,7 @@ pub static EQUIPMENT: &[EquipmentDef] = &[
         piercing: 100.0,
         hardness: 0.95,
         build_cost_ic: 15.0,
+        resources: &[("steel", 4.0), ("chromium", 1.0)],
     },
 ];
 

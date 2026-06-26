@@ -260,12 +260,24 @@ fn build_equipment(
     overlay!(reliability, "reliability");
     let stats = compute_equipment_stats(&base, &modules);
 
+    // 解析 resources 块(原版 `resources = { steel = 2 tungsten = 1 }`)
+    // resources 在型号/底盘条目自身, 不在 history 子块
+    let resources: Vec<(String, f64)> = find_block(entry, "resources")
+        .map(|rb| {
+            rb.fields
+                .iter()
+                .filter_map(|f| f.value.as_scalar_num().map(|v| (f.key.clone(), v)))
+                .collect()
+        })
+        .unwrap_or_default();
+
     Some(EquipmentDef {
         name: chassis.name.clone(),
         chassis: archetype_name.to_string(),
         year: chassis.year,
         equip_type: chassis.equip_type.clone(),
         stats,
+        resources,
     })
 }
 
