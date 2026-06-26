@@ -688,4 +688,116 @@ pub fn register(reg: &mut Registry) {
             Ok(false)
         }
     });
+
+    // 创建生产线
+    reg.register("create_production_line", |w, p| {
+        let owner = np(p, "create_production_line", "owner")?.as_str()
+            .ok_or_else(|| CmdError::RuntimeError("owner 应为字符串".into()))?
+            .to_string();
+        let variant = np(p, "create_production_line", "variant")?.as_str()
+            .ok_or_else(|| CmdError::RuntimeError("variant 应为字符串".into()))?
+            .to_string();
+        let factories = num_of(np(p, "create_production_line", "factories")?)? as u32;
+
+        if !w.data.equipment.contains_key(&variant) {
+            return Err(CmdError::RuntimeError(format!("variant {} 未在 GameData", variant)));
+        }
+
+        let id = w.countries.get(&owner)
+            .map(|c| c.production_lines.iter().map(|l| l.id).max().unwrap_or(0) + 1)
+            .unwrap_or(1);
+
+        let mut line = crate::economy::ProductionLine::new(id, variant);
+        line.set_active(factories);
+
+        let country = w.countries.entry(owner).or_default();
+        country.production_lines.push(line);
+        Ok(())
+    });
+
+    // 调整生产线工厂数
+    reg.register("set_line_factories", |w, p| {
+        let owner = np(p, "set_line_factories", "owner")?.as_str()
+            .ok_or_else(|| CmdError::RuntimeError("owner 应为字符串".into()))?
+            .to_string();
+        let line_id = num_of(np(p, "set_line_factories", "line_id")?)? as u32;
+        let factories = num_of(np(p, "set_line_factories", "factories")?)? as u32;
+
+        let country = w.countries.entry(owner).or_default();
+        let line = country.production_lines.iter_mut()
+            .find(|l| l.id == line_id)
+            .ok_or_else(|| CmdError::RuntimeError(format!("line_id {} 不存在", line_id)))?;
+        line.set_active(factories);
+        Ok(())
+    });
+
+    // 切换生产线型号
+    reg.register("change_line_variant", |w, p| {
+        let owner = np(p, "change_line_variant", "owner")?.as_str()
+            .ok_or_else(|| CmdError::RuntimeError("owner 应为字符串".into()))?
+            .to_string();
+        let line_id = num_of(np(p, "change_line_variant", "line_id")?)? as u32;
+        let variant = np(p, "change_line_variant", "variant")?.as_str()
+            .ok_or_else(|| CmdError::RuntimeError("variant 应为字符串".into()))?
+            .to_string();
+
+        if !w.data.equipment.contains_key(&variant) {
+            return Err(CmdError::RuntimeError(format!("variant {} 未在 GameData", variant)));
+        }
+
+        let country = w.countries.entry(owner).or_default();
+        let line = country.production_lines.iter_mut()
+            .find(|l| l.id == line_id)
+            .ok_or_else(|| CmdError::RuntimeError(format!("line_id {} 不存在", line_id)))?;
+        crate::economy::production::change_line_variant(line, &variant);
+        Ok(())
+    });
+
+    // 删除生产线
+    reg.register("remove_production_line", |w, p| {
+        let owner = np(p, "remove_production_line", "owner")?.as_str()
+            .ok_or_else(|| CmdError::RuntimeError("owner 应为字符串".into()))?
+            .to_string();
+        let line_id = num_of(np(p, "remove_production_line", "line_id")?)? as u32;
+
+        let country = w.countries.entry(owner).or_default();
+        let before = country.production_lines.len();
+        country.production_lines.retain(|l| l.id != line_id);
+        if country.production_lines.len() == before {
+            return Err(CmdError::RuntimeError(format!("line_id {} 不存在", line_id)));
+        }
+        Ok(())
+    });
+
+    // State 资源调试命令(demo setup 用)
+    reg.register("add_state_resource", |w, p| {
+        let sid = num_of(np(p, "add_state_resource", "state")?)? as u32;
+        let resource = np(p, "add_state_resource", "resource")?.as_str()
+            .ok_or_else(|| CmdError::RuntimeError("resource 应为字符串".into()))?
+            .to_string();
+        let amount = num_of(np(p, "add_state_resource", "amount")?)?;
+
+        let state = w.states.get_mut(&sid)
+            .ok_or_else(|| CmdError::RuntimeError(format!("state {} 不存在", sid)))?;
+        *state.resources.entry(resource).or_insert(0.0) += amount;
+        Ok(())
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::registry::Registry;
+
+    #[test]
+    fn t_production_commands_registered() {
+        let mut reg = Registry::new();
+        register(&mut reg);
+        // 5 new commands should be registered
+        for name in ["create_production_line", "set_line_factories",
+                     "change_line_variant", "remove_production_line",
+                     "add_state_resource"] {
+            assert!(reg.get_effect(name).is_some(), "{name} 应已注册");
+        }
+    }
 }
