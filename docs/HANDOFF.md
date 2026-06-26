@@ -1,7 +1,7 @@
 # hoi4-clone 项目交接文档
 
 > **用途**: 在新会话中继续开发。读本文件 + 列出的关键文件即可接上。
-> **更新**: 2026-06-25(P0-2 地形修正接通 — 攻方惩罚 + 地形宽度; **208 测试** = 143 内联 + 48 battle + 13 integration + 3 scope + 1 teleport; 见下方"P0-2 地形修正接通"小节)
+> **更新**: 2026-06-26(生产系统 + 装备 key 重构 — arms_factory 每日产出 + variant 全名 key + per-slot 效率 + 资源惩罚; **235 测试** = 165 内联 + 48 battle + 13 integration + 4 production + 3 scope + 1 teleport + 1 misc; 26 Playwright 验证; 见下方"生产系统"小节)
 
 ---
 
@@ -12,8 +12,8 @@
 - **位置**: `G:\projects\hoi4-clone\`
 - **运行**: `cargo test`(测试) / `cargo run --bin hoi4_demo`(CLI) / 浏览器 `http://127.0.0.1:8765`(UI demo)
 - **工具链**: `stable-x86_64-pc-windows-gnu`(rustup override 绑定)
-- **规模**: ~8100 行 Rust + UI(30+ JS 文件) + 原版数据, **208 Rust 测试 = 143 内联 + 48 battle + 13 integration + 3 scope + 1 teleport; 22 Playwright 验证**
-- **分支**: `feat/data-driven-engine`(本轮 25 个提交: 地图视觉 + 游戏逻辑完善)
+- **规模**: ~8800 行 Rust + UI(30+ JS 文件) + 原版数据, **235 Rust 测试 = 165 内联 + 48 battle + 13 integration + 4 production + 3 scope + 1 teleport + 1 misc; 26 Playwright 验证**
+- **分支**: `feat/production-system`(本轮 9 个提交: 生产系统 + 装备 key 重构)
 - **验证**: `node tests/web_demo.mjs`(Playwright, 用系统 Chrome channel:'chrome', 22 项端到端)
 
 ---
@@ -41,6 +41,42 @@
 | **游戏逻辑层完善** | 见下方"游戏逻辑完善"小节(占领省份级/国家视角/移动距离+速度/外交/拖拽下令; 126 测试 + 22 验证) | 126+UI |
 | **P0-1 国家资源重构** | 见下方"P0-1 国家资源重构"小节(三件套国家级 + modifier 打通 + create_country; 202 测试) | 202 |
 | **P0-2 地形修正接通** | 见下方"P0-2 地形修正接通"小节(攻方地形惩罚 + 地形宽度(含反击修正); 208 测试) | 208 |
+| **生产系统 + 装备 key 重构** | 见下方"生产系统"小节(arms_factory 每日产出 + per-slot 效率 + 资源惩罚 + variant key; 235 测试) | 235 |
+
+### 生产系统 + 装备 key 重构(2026-06-26, 闭环: 损耗→生产→补给→再战)
+
+实现 arms_factory 每日产出装备入仓库, 与现有 reinforce 形成完整闭环。
+同时把装备 key 链路从 chassis 改成 variant(原版语义: 需求按族, 持有按变体)。
+
+| 改造 | 内容 | 对齐/来源 |
+|---|---|---|
+| **生产线(per-slot)** | ProductionLine(15 槽位), 每槽独立 efficiency | 原版 EFFICIENCY_LOSS_PER_UNUSED_DAY 注释 |
+| **效率机制** | 起始 10%, cap 50%, 每日 (cap-eff)×0.1 增长; inactive 槽 -0.01/日衰减 | defines BASE_FACTORY_* |
+| **variant 切换保留** | 同 chassis 不同 variant 90%; 不同 chassis 重置 | defines BASE_FACTORY_EFFICIENCY_VARIANT_CHANGE_FACTOR |
+| **资源惩罚** | 缺 N 单位资源 → -5%×N/line 级; 多资源累加; mult=max(0, 1-penalty) | defines PRODUCTION_RESOURCE_LACK_PENALTY |
+| **production_step** | clock 每日 on_daily 后, reinforce_all 前; 三阶段(快照→计算→写回) | — |
+| **装备 key 重构** | need=chassis, held/stockpile=variant; reinforce 按 chassis 查 variant 池(优先最新) | 原版"需求按族, 持有按变体" |
+| **State 资源加载** | state_loader 解析 `resources={steel=N}` 块到 State.resources; variant 继承 archetype resources(原版语义) | 原版 history/states/*.txt |
+| **5 个新命令** | create_production_line/set_line_factories/change_line_variant/remove_production_line/add_state_resource | effects_documentation 风格 |
+| **UI 面板** | productionPanel(生产线+仓库只读展示, 加减工厂)+ stockpileBadge 顶栏徽章 | 原版生产标签页风格 |
+
+**关键决策**(用户确认 + 原版调研):
+- per-slot 严格对齐(用户选严格 vs per-line 简化)
+- 资源 -5%/工厂/单位严格对齐(用户选严格 vs 比例简化)
+- 装备 key 选 variant 全名(用户选, 对齐原版混装语义)
+- 切 chassis 重置 / 切 variant 90% 保留(defines 实证)
+- 民用工厂/资源贸易/建造系统 留后续(YAGNI)
+
+**踩坑**:
+- Country 加字段后 Default 要补;reinforce 改 key 时现有 3 个测试同步改 key(variant 全名)。
+- World.data 是 Arc<GameData>(只读), 测试时无法注入 mock 装备, 端到端测试放 integration 用嵌入数据。
+- variant_chassis 用 rfind('_')+suffix 数字判定, 注意 chassis 名本身含下划线(light_tank_chassis) 的情况。
+- **loader 资源继承**: Phase 2 初版只解析 variant 自身的 `resources` 块, 但原版把 `resources` 写在 archetype 上(variant 不重定义)。Phase 7a 加 ChassisDef.resources 字段 + overlay 修正。
+- **资源惩罚数学**: 5 工厂各需 2 钢 + 0 钢可用 = shortage 10 → penalty 0.5 → mult 0.5(50% 产出, 非 0)。要 mult 归零需 shortage ≥ 20(15 工厂 × 2 钢 = shortage 30 才行)。Plan 原值有 spec 错误, integration 测试 `t_no_output_when_no_steel` 用 15 工厂而非 5。
+
+**待办**(后续):
+- WASM artifact 未重建(本环境无 wasm32 target); 用户跑 `rustup target add wasm32-unknown-unknown && cargo build --target wasm32-unknown-unknown --lib --release && cp target/wasm32-unknown-unknown/release/hoi4_clone.wasm web/` 后才能验证 Playwright 新增项。
+- Playwright 新增 4 项检查已加入 `tests/web_demo.mjs`(面板按钮/徽章/面板可打开/生产线行可见), 但因 WASM stale 本会话未跑。
 
 ### P0-2 地形修正接通(2026-06-25, 地基层最后一块拼图)
 

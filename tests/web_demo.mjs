@@ -246,6 +246,40 @@ await page.waitForTimeout(300);
 const topbarAfter = await page.locator('#topbar').innerText();
 check('tick 链路通(推进后顶栏仍正常渲染)', /1936|\d+\.\d+\.\d+/.test(topbarAfter));
 
+// === 生产系统检查 ===
+// 1. 顶栏生产按钮存在
+const btnProd = await page.locator('#btnProduction').count();
+check('顶栏含生产按钮', btnProd > 0);
+
+// 2. 仓库徽章存在并显示库存数
+const badgeText = await page.locator('#stockpileBadge').innerText();
+check('仓库徽章显示库存数', /📦\s*[\d.]+/.test(badgeText), badgeText.trim().slice(0, 30));
+
+// 3. 打开生产面板
+if (btnProd > 0) {
+  await page.locator('#btnProduction').click();
+  await page.waitForTimeout(200);
+}
+const panelVisible = await page.locator('#productionPanel').count();
+check('生产面板可打开', panelVisible > 0);
+
+// 4. 面板内有生产线行(GER 初始 2 条, FRA 初始 1 条; 当前 player=GER)
+if (panelVisible > 0) {
+  const lineCount = await page.locator('#productionPanel .pp-line').count();
+  check('生产面板显示生产线', lineCount >= 1, 'lines=' + lineCount);
+  // 显示仓库分组
+  const stockGroupCount = await page.locator('#productionPanel .pp-stock-group').count();
+  check('生产面板显示仓库分组', stockGroupCount >= 1, 'groups=' + stockGroupCount);
+} else {
+  check('生产面板显示生产线', false, '面板未打开');
+  check('生产面板显示仓库分组', false, '面板未打开');
+}
+
+// 5. 跑 24 小时后仓库数字应增长(刚跑过 24 次 tick, 库存已积累)
+const badgeAfter = await page.locator('#stockpileBadge').innerText();
+const matchAfter = badgeAfter.match(/📦\s*([\d.]+)/);
+check('24小时后仓库有积累', matchAfter ? parseFloat(matchAfter[1]) > 0 : false, badgeAfter);
+
 // 截图存证
 await page.screenshot({ path: 'tests/demo-final.png', fullPage: false });
 check('截图已保存', true, 'tests/demo-final.png');

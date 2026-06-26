@@ -75,7 +75,7 @@ cargo test                    # 全量(含 tests/ 集成)
 cargo test -- --test-threads=1
 ```
 
-当前基线: **206 测试全绿**。见 `docs/HANDOFF.md`。
+当前基线: **235 测试全绿**。见 `docs/HANDOFF.md`。
 
 ---
 
