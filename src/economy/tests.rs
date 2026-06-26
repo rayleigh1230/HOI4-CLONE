@@ -139,16 +139,31 @@ fn t_multiple_resource_penalties_stack() {
 }
 
 #[test]
-fn t_zero_output_when_full_shortage() {
+fn t_half_penalty_when_one_resource_fully_short() {
+    // 单一资源全部短缺(缺 10 单位)→ -50%
     let mut line = ProductionLine::new(0, "artillery_1".into());
     line.set_active(10);
     let eq = mock_equip("artillery_1", 3.5, vec![("tungsten", 1.0)]);
     let res = HashMap::new(); // 0 钨
     let mult = resource_penalty(&line, &eq, &res);
-    // 缺 10 → -50% → 实际 mult = 0.5(只有 tungsten 短缺)
     assert!(
         (mult - 0.50).abs() < 1e-9,
         "缺 10 钨应 -50%, mult={}",
+        mult
+    );
+}
+
+#[test]
+fn t_multiplier_clamps_to_zero_on_severe_shortage() {
+    // 15 工厂(上限)各需 2 钨, 总缺 30 → penalty=1.5(>1) → mult 被 .max(0.0) 钳为 0
+    let mut line = ProductionLine::new(0, "artillery_1".into());
+    line.set_active(20); // 实际激活上限 15
+    let eq = mock_equip("artillery_1", 3.5, vec![("tungsten", 2.0)]);
+    let res = HashMap::new(); // 0 钨
+    let mult = resource_penalty(&line, &eq, &res);
+    assert!(
+        mult.abs() < 1e-9,
+        "短缺 penalty≥1.0 时应钳为 0, mult={}",
         mult
     );
 }
