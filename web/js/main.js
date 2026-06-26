@@ -1,7 +1,8 @@
 // 启动入口: 装配 WASM + store + canvas + input + 图层 + 完整 setup
 import { loadWasm } from './engine/wasm.js';
 import { getState } from './engine/state.js';
-import { setPlayer, runSetup, tick, deployTemplate, supply, moveDivision } from './engine/commands.js';
+import { setPlayer, runSetup, tick, deployTemplate, supply, moveDivision,
+  createProductionLine, addStateResource, addEquipment } from './engine/commands.js';
 import { store } from './core/store.js';
 import * as canvas from './core/canvas.js';
 import * as input from './core/input.js';
@@ -15,6 +16,8 @@ import { init as initDeploy } from './views/deployPanel.js';
 import { init as initDiplo } from './views/diplomacyPanel.js';
 import { init as initUnitPanel } from './views/unitPanel.js';
 import { init as initCombat, openBattle } from './views/combatPanel.js';
+import { init as initProd } from './views/productionPanel.js';
+import { renderStockpileBadge } from './views/stockpilePanel.js';
 import * as drawer from './ui/drawer.js';
 import * as orderMenu from './ui/orderMenu.js';
 import { render as renderTopbar } from './ui/topbar.js';
@@ -36,6 +39,7 @@ let autoTimer = null;
 export function refresh() {
   store.setState(getState());
   canvas.render(store.state);
+  renderStockpileBadge(document.getElementById('stockpileBadge'), store.state);
   window._store = store;  // 调试钩子: 供 Playwright 验证读 store.state(非生产代码, 但无害)
 }
 
@@ -95,10 +99,15 @@ async function main() {
   initDiplo();
   initUnitPanel();
   initCombat();
+  initProd();
 
   // 顶栏 + 底栏渲染(时间控制在 bottombar, 对齐 spec §7.1)
   renderTopbar();
   renderBottombar();
+
+  // 顶栏仓库徽章(只读: 库存总量 + 生产线数)
+  const badge = h('span', { id: 'stockpileBadge', class: 'stockpile-badge' });
+  document.getElementById('topbar').append(badge);
 
   // ===== 点击交互(同步注册, 立即生效) =====
   let selectedDiv = null;   // 当前选中师(用于"选师→点省下令")
@@ -289,6 +298,26 @@ create_province = { id = 10 state = 2 neighbors = { 4 5 9 } }
 declare_war = { attacker = GER defender = FRA }
 `;
   runSetup(script);
+
+  // ===== 生产系统初始化 =====
+  // 给 GER State 1 + State 2 加 steel(模拟本土钢产)
+  addStateResource(1, 'steel', 24);
+  addStateResource(2, 'steel', 12);
+  // 给 FRA State 7 + State 8 加 steel
+  addStateResource(7, 'steel', 16);
+  addStateResource(8, 'steel', 12);
+
+  // GER 初始生产线
+  createProductionLine('GER', 'infantry_equipment_1', 5);
+  createProductionLine('GER', 'artillery_equipment_1', 2);
+  // FRA 初始生产线
+  createProductionLine('FRA', 'infantry_equipment_1', 4);
+
+  // 起步库存(模拟"已生产几天")
+  addEquipment('GER', 'infantry_equipment_1', 100);
+  addEquipment('GER', 'artillery_equipment_1', 20);
+  addEquipment('FRA', 'infantry_equipment_1', 80);
+
   supply('GER');
   supply('FRA');
 

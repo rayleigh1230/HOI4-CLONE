@@ -53,3 +53,27 @@ export function whitePeace(a, b) {
   const ta = passStr(a), tb = passStr(b);
   e().engine_white_peace(ta.ptr, ta.len, tb.ptr, tb.len);
 }
+
+// === 生产系统 ===
+// 通过 runSetup 复用 engine_run_setup FFI; 无需新增 wasm 导出
+function runProdScript(stmt) {
+  return runSetup(stmt);
+}
+export function createProductionLine(owner, variant, factories) {
+  return runProdScript(`create_production_line = { owner = ${owner} variant = ${variant} factories = ${factories} }`);
+}
+export function setLineFactories(owner, lineId, factories) {
+  return runProdScript(`set_line_factories = { owner = ${owner} line_id = ${lineId} factories = ${factories} }`);
+}
+export function changeLineVariant(owner, lineId, variant) {
+  return runProdScript(`change_line_variant = { owner = ${owner} line_id = ${lineId} variant = ${variant} }`);
+}
+export function removeProductionLine(owner, lineId) {
+  return runProdScript(`remove_production_line = { owner = ${owner} line_id = ${lineId} }`);
+}
+export function addStateResource(state, resource, amount) {
+  return runProdScript(`add_state_resource = { state = ${state} resource = ${resource} amount = ${amount} }`);
+}
+export function addEquipment(owner, type, amount) {
+  return runProdScript(`add_equipment = { owner = ${owner} type = ${type} amount = ${amount} }`);
+}
