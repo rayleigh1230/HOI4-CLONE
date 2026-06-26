@@ -19,7 +19,7 @@
 ### 原版游戏路径(查证时去这看)
 
 ```
-原版安装目录:  G:\Steam\steamapps\common\Hearts of Iron IV
+原版安装目录:  D:\Program Files (x86)\Steam\steamapps\common\Hearts of Iron IV
   └── common\                      ← 数据文件根目录(查证主战场)
       ├── defines\00_defines.lua   ← 所有数值常量(NMilitary/NCountry/NEconomy...)
       ├── terrain\00_terrain.txt   ← 地形(combat_width/attack惩罚/movement_cost)
