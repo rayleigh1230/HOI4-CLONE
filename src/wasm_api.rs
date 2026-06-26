@@ -542,13 +542,42 @@ fn serialize_state(world: &World) -> String {
     for (tag, country) in &world.countries {
         if !cfirst { s.push(','); }
         cfirst = false;
+        s.push('{');
         s.push_str(&format!(
-            "{{\"tag\":\"{}\",\"political_power\":{},\"stability\":{},\"war_support\":{}}}",
+            "\"tag\":\"{}\",\"political_power\":{},\"stability\":{},\"war_support\":{}",
             tag,
             country.effective_political_power(),
             country.effective_stability(),
             country.effective_war_support()
         ));
+        // stockpile(variant key → 数量)
+        s.push_str(",\"stockpile\":{");
+        let mut sk_first = true;
+        for (k, v) in &country.equipment_stockpile {
+            if !sk_first { s.push(','); }
+            sk_first = false;
+            // 转义 key 中的引号/反斜杠(虽然 variant key 一般是 ASCII 标识符, 防御性转义)
+            let escaped = k.replace('\\', "\\\\").replace('"', "\\\"");
+            s.push_str(&format!("\"{}\":{}", escaped, v));
+        }
+        s.push('}');
+        // production_lines
+        s.push_str(",\"production_lines\":[");
+        for (i, line) in country.production_lines.iter().enumerate() {
+            if i > 0 { s.push(','); }
+            let effs: Vec<f64> = line.slots.iter().map(|slot| slot.efficiency).collect();
+            s.push_str(&format!(
+                "{{\"id\":{},\"variant\":\"{}\",\"chassis\":\"{}\",\"active\":{},\"efficiencies\":[",
+                line.id, line.variant, line.chassis, line.active_count
+            ));
+            for (j, e) in effs.iter().enumerate() {
+                if j > 0 { s.push(','); }
+                s.push_str(&format!("{}", e));
+            }
+            s.push_str("]}");
+        }
+        s.push_str("]");
+        s.push('}');  // close country object
     }
     s.push_str("]");
     // 阵营映射(tag → faction 名; 无阵营的国家不出现在此映射)

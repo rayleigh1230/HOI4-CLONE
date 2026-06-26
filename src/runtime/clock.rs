@@ -21,6 +21,7 @@ impl GameClock {
         if world.hour % 24 == 0 {
             world.fire_event(interp, "on_daily");
             world.fire_event(interp, &format!("on_daily_{}", world.player_tag));
+            crate::economy::production::production_step(world);
             crate::combat::reinforce::reinforce_all(world); // M4a: 每日增援补装备
         }
         if world.hour % (24 * 7) == 0 {
