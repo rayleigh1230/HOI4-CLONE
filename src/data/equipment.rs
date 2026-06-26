@@ -53,6 +53,8 @@ pub struct ChassisDef {
     pub base_stats: EquipStats,    // 底盘自带基础属性
     pub slots: Vec<SlotDef>,       // 槽位定义(整件装备为空)
     pub default_modules: HashMap<String, String>, // slot_name → module_name(预设组合)
+    /// 生产所需资源(原版 `resources = { steel = 2 }`), archetype 定义, 型号继承
+    pub resources: Vec<(String, f64)>,
 }
 
 #[derive(Debug, Clone)]
@@ -216,6 +218,7 @@ mod tests {
             year: 1936, is_archetype: true,
             base_stats: EquipStats::default(),
             slots: vec![], default_modules: HashMap::new(),
+            resources: Vec::new(),
         };
         assert!(c.slots.is_empty());
         assert!(c.default_modules.is_empty());

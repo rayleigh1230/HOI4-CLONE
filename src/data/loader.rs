@@ -136,6 +136,15 @@ fn parse_chassis(name: &str, block: &Block) -> ChassisDef {
     let base_stats = extract_stats(block);
     let slots = parse_slots(block);
     let default_modules = parse_default_modules(block);
+    // 解析 resources 块(原版 archetype 上定义 `resources = { steel = 2 }`)
+    let resources: Vec<(String, f64)> = find_block(block, "resources")
+        .map(|rb| {
+            rb.fields
+                .iter()
+                .filter_map(|f| f.value.as_scalar_num().map(|v| (f.key.clone(), v)))
+                .collect()
+        })
+        .unwrap_or_default();
     ChassisDef {
         name: name.into(),
         equip_type,
@@ -144,6 +153,7 @@ fn parse_chassis(name: &str, block: &Block) -> ChassisDef {
         base_stats,
         slots,
         default_modules,
+        resources,
     }
 }
 
@@ -261,8 +271,8 @@ fn build_equipment(
     let stats = compute_equipment_stats(&base, &modules);
 
     // 解析 resources 块(原版 `resources = { steel = 2 tungsten = 1 }`)
-    // resources 在型号/底盘条目自身, 不在 history 子块
-    let resources: Vec<(String, f64)> = find_block(entry, "resources")
+    // 型号自带 resources 优先; 否则继承 archetype 的 resources(原版语义)
+    let own_resources: Vec<(String, f64)> = find_block(entry, "resources")
         .map(|rb| {
             rb.fields
                 .iter()
@@ -270,6 +280,11 @@ fn build_equipment(
                 .collect()
         })
         .unwrap_or_default();
+    let resources = if !own_resources.is_empty() {
+        own_resources
+    } else {
+        archetype.resources.clone()
+    };
 
     Some(EquipmentDef {
         name: chassis.name.clone(),
@@ -606,5 +621,21 @@ mod tests {
         // FRA OOB 模板应加载
         let data = crate::data::loader::load_all();
         assert!(data.templates.contains_key("Division d'Infanterie"), "应加载 FRA 步兵模板");
+    }
+
+    #[test]
+    fn t_variant_inherits_archetype_resources() {
+        let data = crate::data::loader::load_all();
+        let inf1 = data.equipment.get("infantry_equipment_1")
+            .expect("应有 infantry_equipment_1");
+        assert!(inf1.resources.iter().any(|(k, v)| k == "steel" && (*v - 2.0).abs() < 1e-9),
+            "infantry_equipment_1 应继承 archetype 的 steel=2, 实际 {:?}", inf1.resources);
+
+        let art1 = data.equipment.get("artillery_equipment_1")
+            .expect("应有 artillery_equipment_1");
+        let has_tungsten = art1.resources.iter().any(|(k, v)| k == "tungsten" && (*v - 1.0).abs() < 1e-9);
+        let has_steel = art1.resources.iter().any(|(k, v)| k == "steel" && (*v - 2.0).abs() < 1e-9);
+        assert!(has_tungsten && has_steel,
+            "artillery_equipment_1 应继承 tungsten=1 + steel=2, 实际 {:?}", art1.resources);
     }
 }
