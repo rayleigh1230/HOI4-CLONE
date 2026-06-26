@@ -89,6 +89,7 @@ fn parse_state_block(b: &Block) -> Option<State> {
         state_category: category,
         cores,
         buildings,
+        resources: Default::default(),  // 下个 phase 从 `resources = { steel = N }` 块加载
         provinces,
     })
 }

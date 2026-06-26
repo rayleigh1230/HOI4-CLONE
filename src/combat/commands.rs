@@ -143,6 +143,7 @@ pub fn register(reg: &mut Registry) {
         w.states.insert(id, crate::runtime::State {
             id, name, owner: owner.into(), controller, manpower,
             state_category: category, cores, buildings,
+            resources: Default::default(),
             provinces: vec![],
         });
         Ok(())

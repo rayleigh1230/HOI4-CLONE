@@ -27,6 +27,9 @@ pub struct State {
     pub state_category: String,    // "town"/"city"/"megalopolis"(决定建筑槽位)
     pub cores: Vec<String>,        // 核心国 tag(谁有合法领土声索)
     pub buildings: HashMap<String, f64>,  // 建筑占位映射(后续建筑系统升级)
+    /// 本土资源产出(steel/tungsten/aluminium/chromium/oil/rubber)
+    /// 从原版 history/states/*.txt 的 `resources = { steel = N }` 块加载
+    pub resources: HashMap<String, f64>,
     pub provinces: Vec<u32>,       // 这个 State 包含哪些省份(正向映射)
 }
 
@@ -45,6 +48,8 @@ pub struct Country {
     pub equipment_stockpile: std::collections::HashMap<String, f64>,
     /// 人力池(陆战循环): 国家征召的兵员储备
     pub manpower_pool: f64,
+    /// 生产线列表(per-slot 效率, 对齐原版 production_line)
+    pub production_lines: Vec<crate::economy::ProductionLine>,
     /// modifier 汇总(科技/精神/ideas 等国家级修正; 战斗+资源修正统一栈)
     pub modifiers: crate::combat::modifier::ModifierStack,
     /// 阵营名(None = 不在阵营; 宣战时同阵营成员自动加入)
@@ -62,6 +67,7 @@ impl Default for Country {
             war_support: 0.5,    // 原版 BASE_WAR_SUPPORT
             equipment_stockpile: Default::default(),
             manpower_pool: 0.0,
+            production_lines: Default::default(),
             modifiers: Default::default(),
             faction: None,
         }
